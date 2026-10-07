@@ -56,6 +56,33 @@ public class InventoryScenarioTests
     }
 
     [Test]
+    public async Task Sln_OrdersMembersByPath_NotByFileOrder()
+    {
+        // Unlike .slnx, a .sln keeps its file order, so the inventory itself has to make the order stable.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("src/z/Z.csproj")
+            .WriteProject("src/B/B.csproj")
+            .WriteProject("src/a/A.csproj")
+            .Write("All.sln", """
+                Microsoft Visual Studio Solution File, Format Version 12.00
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Z", "src\z\Z.csproj", "{11111111-1111-1111-1111-111111111111}"
+                EndProject
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "B", "src\B\B.csproj", "{22222222-2222-2222-2222-222222222222}"
+                EndProject
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "A", "src\a\A.csproj", "{33333333-3333-3333-3333-333333333333}"
+                EndProject
+                Global
+                EndGlobal
+                """);
+
+        InventoryResult result = workspace.Inventory("All.sln");
+
+        await Assert.That(result.Projects.Select(p => p.Path)).IsEquivalentTo(
+            ["src/a/A.csproj", "src/B/B.csproj", "src/z/Z.csproj"],
+            CollectionOrdering.Matching);
+    }
+
+    [Test]
     public async Task Selection_WithSeveralSolutionsInDirectory_IsAmbiguous()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()

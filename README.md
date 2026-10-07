@@ -32,7 +32,7 @@ dotnet run --project VsTestToMtp -- --help
 
 `VsTestToMtp.Inventory.InventoryBuilder.Build(path)` inventories a `.csproj`, `.sln` or `.slnx` without modifying anything: exact solution membership, MSBuild-evaluated properties, package references and project references per target framework (with file/line, condition and import-chain provenance), the imported `Directory.Build.props/targets` and `Directory.Packages.props`, the effective `global.json`, and CI/script files (generated and hidden directories are skipped). Projects are classified as test applications from evaluated `IsTestProject` and package evidence declared in the project itself, never from file names. Anything that cannot be determined (missing imports, evaluation failures, environment-dependent conditions, `IsTestProject` conditions in `Directory.Build.props`, ...) is reported as an actionable blocker instead of a guess.
 
-Evaluation uses the .NET SDK's MSBuild (located with `Microsoft.Build.Locator`, honoring `global.json`), so an installed SDK is required at runtime. Nothing is restored or built, and `obj/*.nuget.g.*` files are ignored so results do not depend on restore state.
+Evaluation uses the .NET SDK's MSBuild (located with `Microsoft.Build.Locator`, honoring `global.json`), so an installed SDK is required at runtime. Nothing is restored or built, and `obj/*.nuget.g.*` files are ignored so results do not depend on restore state. This is also what keeps classification correct: `Microsoft.NET.Test.Sdk` sets `IsTestProject=true` for every project that references it once restored, so a production project that merely references it must not be treated as a test application on that basis.
 
 ### VSTest migration fixtures
 

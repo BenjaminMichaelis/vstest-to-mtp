@@ -33,6 +33,8 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
     private readonly Dictionary<string, string> _globalProperties = new(StringComparer.OrdinalIgnoreCase)
     {
         // Ignore obj/*.nuget.g.props/targets so the result does not depend on whether (or when) the project was restored.
+        // This also matters for correctness: Microsoft.NET.Test.Sdk's props set IsTestProject=true for any project that
+        // references it, which would make a restored production project look like a test application.
         ["ImportProjectExtensionProps"] = "false",
         ["ImportProjectExtensionTargets"] = "false",
         ["ExcludeRestorePackageImports"] = "true",
