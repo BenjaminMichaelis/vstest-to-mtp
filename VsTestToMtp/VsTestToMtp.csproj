@@ -1,0 +1,74 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
+
+    <!-- dotnet tool packaging -->
+    <PackAsTool>true</PackAsTool>
+    <PackageId>vstest-to-mtp</PackageId>
+    <!-- System.CommandLine derives the usage/root command name from the executable name. -->
+    <AssemblyName>vstest-to-mtp</AssemblyName>
+    <RootNamespace>VsTestToMtp</RootNamespace>
+    <ToolCommandName>vstest-to-mtp</ToolCommandName>
+
+    <!--
+    RID-specific tool packaging (choose one of the three modes below).
+    The .NET CLI automatically selects the best package for each user's platform.
+    See: https://learn.microsoft.com/en-us/dotnet/core/tools/rid-specific-tools
+
+    Note: NU5017 is a NuGet validation false positive on the pointer package — all packages are
+    created correctly. Track https://github.com/NuGet/NuGet.Client/issues for when this is fixed.
+    -->
+
+    <!--
+    MODE 1 (default): CoreCLR self-contained — simplest setup.
+    A single `dotnet pack` produces one self-contained package per RID plus a pointer package.
+    `any` provides a portable CoreCLR fallback for platforms not listed (e.g. win-arm64, osx-x64).
+    Optionally add <PublishTrimmed>true</PublishTrimmed> to reduce size after validating trim safety.
+    See: https://learn.microsoft.com/dotnet/core/deploying/trimming/trimming-options
+    -->
+    <RuntimeIdentifiers>win-x64;linux-x64;osx-arm64;any</RuntimeIdentifiers>
+
+    <!--
+    MODE 2: Native AOT — fastest startup and smallest memory footprint.
+    Replace RuntimeIdentifiers above with ToolPackageRuntimeIdentifiers and enable PublishAot.
+    IMPORTANT: AOT compilation requires the build OS to match the target RID's OS — you must run
+    `dotnet pack -r <RID>` separately on each platform (e.g. in a CI matrix).
+    Run `dotnet pack` (no RID) once to produce the top-level pointer package.
+
+    <ToolPackageRuntimeIdentifiers>win-x64;linux-x64;osx-arm64</ToolPackageRuntimeIdentifiers>
+    <PublishAot>true</PublishAot>
+    -->
+
+    <!--
+    MODE 3: Hybrid AOT + CoreCLR fallback — AOT for priority platforms, portable fallback for the rest.
+    Use ToolPackageRuntimeIdentifiers with `any` included, enable PublishAot, then pack each AOT RID
+    on its matching OS and pack the `any` fallback with PublishAot=false.
+
+    Build steps:
+      dotnet pack                              # pointer package (any platform)
+      dotnet pack -r win-x64                   # AOT on Windows
+      dotnet pack -r linux-x64                 # AOT on Linux
+      dotnet pack -r osx-arm64                 # AOT on macOS arm64
+      dotnet pack -r any -p:PublishAot=false   # CoreCLR fallback (any platform)
+
+    <ToolPackageRuntimeIdentifiers>win-x64;linux-x64;osx-arm64;any</ToolPackageRuntimeIdentifiers>
+    <PublishAot>true</PublishAot>
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+
+</Project>
+

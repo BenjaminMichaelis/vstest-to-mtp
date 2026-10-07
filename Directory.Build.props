@@ -1,0 +1,61 @@
+<!-- 
+This file allow for customizing your build process.
+See: https://learn.microsoft.com/visualstudio/msbuild/customize-your-build
+-->
+<Project>
+  <!--
+  Uncomment if you need to enable inclusion of another Directory.Build.props file from a parent directory
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+  -->
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>14</LangVersion>
+    <!-- 
+    If you like to see source generated files saved to disk, you can enable the following:
+    https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview
+    -->
+    <!--<EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>-->
+  </PropertyGroup>
+
+  <!-- Many of these properties can be found here: https://learn.microsoft.com/nuget/create-packages/package-authoring-best-practices#package-metadata -->
+  <PropertyGroup Label="NuGet Details">
+    <Title>vstest-to-mtp: VSTest to Microsoft.Testing.Platform (MTP) migration tool</Title>
+    <Authors>Benjamin Michaelis</Authors>
+    <Description>A .NET global tool that migrates .NET test projects from VSTest to Microsoft.Testing.Platform (MTP) for use with `dotnet test`.</Description>
+    <PackageTags>vstest;mtp;microsoft-testing-platform;Microsoft.Testing.Platform;testing-platform;migration;migrate;dotnet-test;mstest;xunit;nunit;tunit;dotnet-tool</PackageTags>
+    <Copyright>Copyright © 2026-$([System.DateTime]::Now.ToString("yyyy"))</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/BenjaminMichaelis/vstest-to-mtp</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/BenjaminMichaelis/vstest-to-mtp</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <PropertyGroup Label="SourceLink">
+    <!--
+    You will also need to ensure that the appropriate Microsoft.SourceLink.* package is referenced.
+    https://github.com/dotnet/sourcelink
+    -->
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    
+    <!-- 
+    To produce a deterministic build, you will want to enable ContinuousIntegrationBuild as part of the pipeline build, but not for local development.
+    https://learn.microsoft.com/dotnet/core/project-sdk/msbuild-props#continuousintegrationbuild
+    The condition enables this property automatically when using Github Actions for the build, but can be removed if unused.
+    If you want to use Azure Devops, change the `GITHUB_ACTIONS` to `TF_BUILD` in the Condition.
+    -->
+    <!-- <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+      <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    </PropertyGroup> -->
+
+    <!--
+    These are optional, though typically recommended. See the docs for more details
+    https://github.com/dotnet/sourcelink
+    -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+  </PropertyGroup>
+
+</Project>
