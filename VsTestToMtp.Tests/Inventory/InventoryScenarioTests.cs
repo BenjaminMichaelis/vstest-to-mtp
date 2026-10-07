@@ -382,7 +382,7 @@ public class InventoryScenarioTests
 
         ProjectInventory app = workspace.Inventory("All.slnx").Projects.Single(p => p.Name == "App");
 
-        await Assert.That(app.ProjectReferences.Select(r => (r.Path, r.IsInSelection))).IsEquivalentTo(
+        await Assert.That(app.TargetFrameworks.Single().ProjectReferences.Select(r => (r.Path, r.IsInSelection))).IsEquivalentTo(
             [("Core/Core.csproj", true), ("Other/Other.csproj", false)],
             CollectionOrdering.Matching);
     }

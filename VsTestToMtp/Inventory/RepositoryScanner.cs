@@ -71,39 +71,59 @@ internal static partial class RepositoryScanner
         return null;
     }
 
-    /// <summary>CI definitions and scripts under the formatter's root.</summary>
-    public static IReadOnlyList<AutomationFile> FindAutomation(PathFormatter formatter)
+    /// <summary>
+    /// CI definitions and scripts under the formatter's root. A directory that cannot be listed (permissions, deleted
+    /// while scanning) is skipped and reported as a blocker so the rest of the inventory stays usable.
+    /// </summary>
+    public static IReadOnlyList<AutomationFile> FindAutomation(PathFormatter formatter, List<InventoryBlocker> blockers)
     {
         List<AutomationFile> files = [];
-        Walk(formatter.Root, insideHiddenCiDirectory: false, files, formatter);
+        Walk(formatter.Root, insideHiddenCiDirectory: false, files, formatter, blockers);
         return [.. files.OrderBy(f => f.Path, StringComparer.Ordinal)];
     }
 
-    private static void Walk(string directory, bool insideHiddenCiDirectory, List<AutomationFile> files, PathFormatter formatter)
+    private static void Walk(string directory, bool insideHiddenCiDirectory, List<AutomationFile> files, PathFormatter formatter, List<InventoryBlocker> blockers)
     {
-        foreach (string file in Directory.EnumerateFiles(directory))
+        List<(string Path, bool IsCi)> descend = [];
+        try
         {
-            if (Classify(file) is { } kind)
+            foreach (string file in Directory.EnumerateFiles(directory))
             {
-                files.Add(new AutomationFile(formatter.Format(file), kind, MentionsDotNetTest(file)));
+                if (Classify(file) is { } kind)
+                {
+                    files.Add(new AutomationFile(formatter.Format(file), kind, MentionsDotNetTest(file)));
+                }
+            }
+
+            foreach (string child in Directory.EnumerateDirectories(directory))
+            {
+                string name = Path.GetFileName(child);
+                DirectoryInfo info = new(child);
+                bool isHidden = name.StartsWith('.') || info.Attributes.HasFlag(FileAttributes.Hidden);
+                bool isCi = HiddenCiDirectories.Contains(name);
+
+                if (ExcludedDirectories.Contains(name)
+                    || info.Attributes.HasFlag(FileAttributes.ReparsePoint)
+                    || (isHidden && !isCi && !insideHiddenCiDirectory))
+                {
+                    continue;
+                }
+
+                descend.Add((child, isCi));
             }
         }
-
-        foreach (string child in Directory.EnumerateDirectories(directory))
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            string name = Path.GetFileName(child);
-            DirectoryInfo info = new(child);
-            bool isHidden = name.StartsWith('.') || info.Attributes.HasFlag(FileAttributes.Hidden);
-            bool isCi = HiddenCiDirectories.Contains(name);
+            blockers.Add(new InventoryBlocker(
+                BlockerCodes.UnreadableDirectory, BlockerSeverity.Warning,
+                $"'{formatter.Format(directory)}' could not be scanned for CI definitions and scripts: {ex.Message}",
+                "Grant read access (or remove the directory), then rerun. Automation files under it are not listed.",
+                null, formatter.Location(directory)));
+        }
 
-            if (ExcludedDirectories.Contains(name)
-                || info.Attributes.HasFlag(FileAttributes.ReparsePoint)
-                || (isHidden && !isCi && !insideHiddenCiDirectory))
-            {
-                continue;
-            }
-
-            Walk(child, insideHiddenCiDirectory || isCi, files, formatter);
+        foreach ((string path, bool isCi) in descend)
+        {
+            Walk(path, insideHiddenCiDirectory || isCi, files, formatter, blockers);
         }
     }
 

@@ -7,7 +7,8 @@ public sealed record TargetFrameworkState(
     bool HasTestLibraryDependency,
     IReadOnlyList<string> Evidence,
     IReadOnlyList<PropertyState> Properties,
-    IReadOnlyList<PackageReferenceState> Packages)
+    IReadOnlyList<PackageReferenceState> Packages,
+    IReadOnlyList<ProjectReferenceState> ProjectReferences)
 {
     public PropertyState? GetProperty(string name) =>
         Properties.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));

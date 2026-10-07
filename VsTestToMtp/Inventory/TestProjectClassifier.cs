@@ -14,7 +14,7 @@ internal static class TestProjectClassifier
             return new ProjectInventory(
                 evaluated.Path, name, ProjectClassification.Unknown, false, [],
                 [.. evaluated.TargetFrameworks.Select(tf => ToState(tf, ProjectClassification.Unknown, false, []))],
-                evaluated.ProjectReferences, evaluated.Imports, Sorted(blockers));
+                evaluated.Imports, Sorted(blockers));
         }
 
         List<TargetFrameworkState> states = [];
@@ -49,7 +49,7 @@ internal static class TestProjectClassifier
 
         return new ProjectInventory(
             evaluated.Path, name, overall, states.Any(s => s.HasTestLibraryDependency), frameworks,
-            states, evaluated.ProjectReferences, evaluated.Imports, Sorted(blockers));
+            states, evaluated.Imports, Sorted(blockers));
     }
 
     private static (ProjectClassification Classification, bool HasLibraryDependency, List<string> Evidence) ClassifyTargetFramework(
@@ -68,7 +68,7 @@ internal static class TestProjectClassifier
         bool hasLibraryDependency = testPackages.Any(p =>
             TestPackageCatalog.TryGet(p.Name, out TestPackageRole role, out _) && role != TestPackageRole.Runner);
 
-        PropertyState? isTestProject = framework.Properties.FirstOrDefault(p => p.Name == "IsTestProject");
+        PropertyState? isTestProject = framework.Properties.FirstOrDefault(p => string.Equals(p.Name, "IsTestProject", StringComparison.OrdinalIgnoreCase));
         if (isTestProject is not null && bool.TryParse(isTestProject.Value, out bool explicitValue))
         {
             string where = isTestProject.Definition is null ? $"{isTestProject.Source}" : isTestProject.Definition.Location.ToString();
@@ -109,7 +109,7 @@ internal static class TestProjectClassifier
         ProjectClassification classification,
         bool hasLibraryDependency,
         IReadOnlyList<string> evidence) =>
-        new(framework.TargetFramework, classification, hasLibraryDependency, evidence, framework.Properties, framework.Packages);
+        new(framework.TargetFramework, classification, hasLibraryDependency, evidence, framework.Properties, framework.Packages, framework.ProjectReferences);
 
     private static List<InventoryBlocker> Sorted(List<InventoryBlocker> blockers) =>
         [.. blockers

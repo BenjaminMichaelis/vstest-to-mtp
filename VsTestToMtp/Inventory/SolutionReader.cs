@@ -121,7 +121,7 @@ internal static class SolutionReader
         }
 
         string kind = string.Equals(System.IO.Path.GetExtension(solutionPath), ".slnx", StringComparison.OrdinalIgnoreCase) ? "slnx" : "sln";
-        return new Selection(kind, solutionPath, [.. projects.Distinct(StringComparer.OrdinalIgnoreCase)], blockers);
+        return new Selection(kind, solutionPath, [.. projects.Distinct(PathComparison.Comparer)], blockers);
     }
 
     private static Selection Failed(string kind, string path, string code, string message, string remediation, PathFormatter formatter) =>

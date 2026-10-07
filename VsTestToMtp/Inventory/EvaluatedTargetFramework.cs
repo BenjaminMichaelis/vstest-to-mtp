@@ -4,4 +4,5 @@ namespace VsTestToMtp.Inventory;
 internal sealed record EvaluatedTargetFramework(
     string TargetFramework,
     IReadOnlyList<PropertyState> Properties,
-    IReadOnlyList<PackageReferenceState> Packages);
+    IReadOnlyList<PackageReferenceState> Packages,
+    IReadOnlyList<ProjectReferenceState> ProjectReferences);

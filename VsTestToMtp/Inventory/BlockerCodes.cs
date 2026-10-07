@@ -10,6 +10,8 @@ public static class BlockerCodes
     public const string MissingProject = "MissingProject";
     public const string UnsupportedProjectLanguage = "UnsupportedProjectLanguage";
     public const string MsBuildNotFound = "MsBuildNotFound";
+    public const string MsBuildSdkMismatch = "MsBuildSdkMismatch";
+    public const string UnreadableDirectory = "UnreadableDirectory";
     public const string EvaluationFailed = "EvaluationFailed";
     public const string MissingImport = "MissingImport";
     public const string NoTargetFramework = "NoTargetFramework";

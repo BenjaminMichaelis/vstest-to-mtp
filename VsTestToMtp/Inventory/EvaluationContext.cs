@@ -6,22 +6,22 @@ namespace VsTestToMtp.Inventory;
 /// <summary>Per-project helpers for turning MSBuild elements into <see cref="Provenance"/>.</summary>
 internal sealed class EvaluationContext
 {
-    private readonly Dictionary<string, ResolvedImport> _importsByFile = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ResolvedImport> _importsByFile = new(PathComparison.Comparer);
     private readonly PathFormatter _formatter;
     private readonly string[] _externalRoots;
 
-    public EvaluationContext(Project outer, string projectPath, PathFormatter formatter)
+    public EvaluationContext(Project project, string projectPath, PathFormatter formatter)
     {
         ProjectPath = projectPath;
         _formatter = formatter;
 
-        foreach (ResolvedImport import in outer.Imports)
+        foreach (ResolvedImport import in project.Imports)
         {
             _importsByFile.TryAdd(import.ImportedProject.FullPath, import);
         }
 
         // The .NET root (SDKs, packs, workload manifests) and the NuGet cache are not user-owned.
-        string toolsPath = outer.GetPropertyValue("MSBuildToolsPath").TrimEnd('/', '\\');
+        string toolsPath = project.GetPropertyValue("MSBuildToolsPath").TrimEnd('/', '\\');
         string? dotnetRoot = toolsPath.Length == 0 ? null : Path.GetDirectoryName(Path.GetDirectoryName(toolsPath));
         string nugetRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
@@ -30,13 +30,10 @@ internal sealed class EvaluationContext
 
     public string ProjectPath { get; }
 
-    public static bool PathsEqual(string left, string right) =>
-        string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
-
     public bool IsRepositoryFile(string file)
     {
         string full = Path.GetFullPath(file);
-        return !_externalRoots.Any(root => full.StartsWith(root + Path.DirectorySeparatorChar, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
+        return !_externalRoots.Any(root => full.StartsWith(root + Path.DirectorySeparatorChar, PathComparison.Comparison));
     }
 
     public SourceLocation LocationOf(ProjectElement element) =>
@@ -52,9 +49,9 @@ internal sealed class EvaluationContext
     {
         string file = element.Location.File;
         List<ImportStep> chain = [];
-        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> seen = new(PathComparison.Comparer);
         for (string current = file;
-            !PathsEqual(current, ProjectPath) && _importsByFile.TryGetValue(current, out ResolvedImport import) && seen.Add(current);)
+            !PathComparison.Equal(current, ProjectPath) && _importsByFile.TryGetValue(current, out ResolvedImport import) && seen.Add(current);)
         {
             ProjectImportElement importing = import.ImportingElement;
             chain.Insert(0, new ImportStep(LocationOf(importing), JoinConditions(importing)));
@@ -65,7 +62,7 @@ internal sealed class EvaluationContext
             LocationOf(element),
             Conditions(element),
             chain,
-            PathsEqual(file, ProjectPath),
+            PathComparison.Equal(file, ProjectPath),
             IsRepositoryFile(file));
     }
 

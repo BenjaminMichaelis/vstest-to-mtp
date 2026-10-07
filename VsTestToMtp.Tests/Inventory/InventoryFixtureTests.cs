@@ -107,7 +107,7 @@ public class InventoryFixtureTests
         InventoryResult result = Inventory(fixture);
         ProjectInventory tests = result.Projects.Single(p => p.Path == TestProjectPath);
 
-        ProjectReferenceState reference = tests.ProjectReferences.Single();
+        ProjectReferenceState reference = tests.TargetFrameworks.Single().ProjectReferences.Single();
         await Assert.That(reference.Path).IsEqualTo(ProductionProjectPath);
         await Assert.That(reference.IsInSelection).IsTrue();
 

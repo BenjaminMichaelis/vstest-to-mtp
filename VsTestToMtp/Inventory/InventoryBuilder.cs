@@ -26,6 +26,7 @@ public static class InventoryBuilder
 
         List<InventoryBlocker> blockers = [.. selection.Blockers];
         GlobalJsonInfo? globalJson = RepositoryScanner.ReadGlobalJson(selectionDirectory, formatter, blockers);
+        IReadOnlyList<AutomationFile> automation = RepositoryScanner.FindAutomation(formatter, blockers);
 
         List<ProjectInventory> projects = selection.ProjectPaths.Count == 0
             ? []
@@ -41,7 +42,7 @@ public static class InventoryBuilder
             new SelectionInfo(formatter.Format(selection.Path), selection.Kind),
             projects,
             globalJson,
-            RepositoryScanner.FindAutomation(formatter),
+            automation,
             [.. all
                 .DistinctBy(b => (b.Code, b.Project, b.Location, b.Message))
                 .OrderBy(b => b.Project, StringComparer.Ordinal)
@@ -59,19 +60,25 @@ public static class InventoryBuilder
         PathFormatter formatter,
         List<InventoryBlocker> blockers)
     {
-        if (!MsBuildEnvironment.TryRegister(selectionDirectory, out _, out string? error))
+        if (!MsBuildEnvironment.TryRegister(selectionDirectory, out string? errorCode, out string? error))
         {
-            InventoryBlocker blocker = new(
-                BlockerCodes.MsBuildNotFound, BlockerSeverity.Error,
-                $"MSBuild could not be located: {error}",
-                "Install the .NET SDK that the repository's global.json selects, then rerun.",
-                null, null);
+            InventoryBlocker blocker = errorCode == BlockerCodes.MsBuildSdkMismatch
+                ? new(
+                    BlockerCodes.MsBuildSdkMismatch, BlockerSeverity.Error,
+                    error!,
+                    "Inventory repositories that need different SDKs in separate processes (one vstest-to-mtp run per global.json).",
+                    null, null)
+                : new(
+                    BlockerCodes.MsBuildNotFound, BlockerSeverity.Error,
+                    $"MSBuild could not be located: {error}",
+                    "Install the .NET SDK that the repository's global.json selects, then rerun.",
+                    null, null);
             blockers.Add(blocker);
             return
             [
                 .. selection.ProjectPaths.Select(p => new ProjectInventory(
                     formatter.Format(p), Path.GetFileNameWithoutExtension(p), ProjectClassification.Unknown, false,
-                    [], [], [], [], [blocker])),
+                    [], [], [], [blocker])),
             ];
         }
 
@@ -81,7 +88,7 @@ public static class InventoryBuilder
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static List<ProjectInventory> EvaluateRegistered(SolutionReader.Selection selection, PathFormatter formatter)
     {
-        HashSet<string> selected = new(selection.ProjectPaths, StringComparer.OrdinalIgnoreCase);
+        HashSet<string> selected = new(selection.ProjectPaths, PathComparison.Comparer);
         ProjectEvaluator evaluator = new(formatter, selected);
 
         lock (EvaluationLock)

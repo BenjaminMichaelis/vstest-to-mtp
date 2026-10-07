@@ -4,7 +4,6 @@ namespace VsTestToMtp.Inventory;
 internal sealed record EvaluatedProject(
     string Path,
     IReadOnlyList<EvaluatedTargetFramework> TargetFrameworks,
-    IReadOnlyList<ProjectReferenceState> ProjectReferences,
     IReadOnlyList<ImportRecord> Imports,
     IReadOnlyList<InventoryBlocker> Blockers)
 {

@@ -14,6 +14,12 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     // Environment-provided properties that are present on every machine and not worth flagging.
     private static readonly HashSet<string> WellKnownEnvironmentProperties = new(StringComparer.OrdinalIgnoreCase) { "OS" };
 
+    // MSBuild item types are case-insensitive.
+    private static readonly HashSet<string> RelevantItemTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "PackageReference", "PackageVersion", "GlobalPackageReference", "ProjectReference",
+    };
+
     public void AddImportBlockers(ImportLogger logger, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
     {
         foreach (SkippedImport skipped in logger.Skipped)
@@ -78,17 +84,20 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     private static bool IsImportedFromProjectBody(ResolvedImport import, EvaluationContext context) =>
         import.ImportingElement is { } element
         && string.IsNullOrEmpty(element.Sdk)
-        && EvaluationContext.PathsEqual(element.ContainingProject.FullPath, context.ProjectPath);
+        && PathComparison.Equal(element.ContainingProject.FullPath, context.ProjectPath);
 
     /// <summary>
     /// Flags conditions on elements that matter for migration (relevant properties, package/project references, imports)
     /// that compare an unset or environment-provided property with a literal. Unevaluated elements are scanned too,
     /// because a false condition hides the very element whose state would change the outcome.
+    /// MSBuild evaluates all properties before any item, so item conditions see final property state, but property and
+    /// import conditions only see properties defined earlier in evaluation order.
     /// </summary>
     public static void AddConditionBlockers(Project project, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
     {
+        EvaluationOrder order = new(project);
         IEnumerable<ProjectRootElement> roots = [project.Xml, .. project.Imports.Select(i => i.ImportedProject)];
-        foreach (ProjectRootElement root in roots.DistinctBy(r => r.FullPath, StringComparer.OrdinalIgnoreCase))
+        foreach (ProjectRootElement root in roots.DistinctBy(r => r.FullPath, PathComparison.Comparer))
         {
             if (!context.IsRepositoryFile(root.FullPath))
             {
@@ -98,22 +107,34 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             foreach (ProjectElement element in root.AllChildren.Where(IsRelevantElement))
             {
                 SourceLocation location = context.LocationOf(element);
+                int? evaluatedAt = element is ProjectItemElement ? null : order.IndexOf(element);
                 foreach (string condition in EvaluationContext.Conditions(element))
                 {
-                    AddConditionBlockers(project, condition, location, displayPath, blockers);
+                    AddConditionBlockers(project, condition, location, evaluatedAt, order, displayPath, blockers);
                 }
             }
         }
     }
 
-    private static void AddConditionBlockers(Project project, string condition, SourceLocation location, string displayPath, List<InventoryBlocker> blockers)
+    private static void AddConditionBlockers(
+        Project project,
+        string condition,
+        SourceLocation location,
+        int? evaluatedAt,
+        EvaluationOrder order,
+        string displayPath,
+        List<InventoryBlocker> blockers)
     {
         foreach (Match match in LiteralComparison().Matches(condition))
         {
-            foreach (string side in new[] { match.Groups["l"].Value, match.Groups["r"].Value })
+            string left = match.Groups["l"].Value;
+            string right = match.Groups["r"].Value;
+            foreach ((string side, string other) in new[] { (left, right), (right, left) })
             {
                 Match property = PropertyReference().Match(side);
-                if (!property.Success)
+
+                // Comparing with '' is a deliberate "is it unset?" probe, not a dependency on a value.
+                if (!property.Success || other.Length == 0)
                 {
                     continue;
                 }
@@ -126,12 +147,13 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                 }
 
                 ProjectProperty? value = project.GetProperty(name);
-                if (value is null)
+                if (value is null || IsDefinedOnlyLater(value, evaluatedAt, order))
                 {
+                    string state = value is null ? "which is not set" : "which is only set later in evaluation";
                     blockers.Add(new InventoryBlocker(
                         BlockerCodes.ConditionDependsOnUnsetProperty, BlockerSeverity.Warning,
-                        $"Condition '{condition}' at {location} depends on '{name}', which is not set, so the guarded element is treated as absent/false.",
-                        $"Set '{name}' (for example in Directory.Build.props) or pass it as a global property if the guarded state matters.",
+                        $"Condition '{condition}' at {location} depends on '{name}', {state}, so the guarded element is treated as absent/false.",
+                        $"Set '{name}' before this element (for example in Directory.Build.props) or pass it as a global property if the guarded state matters.",
                         displayPath, location));
                 }
                 else if (value.IsEnvironmentProperty)
@@ -146,10 +168,38 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
         }
     }
 
+    /// <summary>
+    /// Whether every definition of <paramref name="value"/> comes after the element being evaluated. Global, reserved and
+    /// environment properties exist from the start, as does anything an earlier definition overrode.
+    /// </summary>
+    private static bool IsDefinedOnlyLater(ProjectProperty value, int? evaluatedAt, EvaluationOrder order)
+    {
+        if (evaluatedAt is not { } at)
+        {
+            return false;
+        }
+
+        int? earliest = null;
+        for (ProjectProperty? definition = value; definition is not null; definition = definition.Predecessor)
+        {
+            if (definition.Xml is null || definition.IsGlobalProperty || definition.IsEnvironmentProperty || definition.IsReservedProperty)
+            {
+                return false;
+            }
+
+            if (order.IndexOf(definition.Xml) is { } index)
+            {
+                earliest = Math.Min(earliest ?? index, index);
+            }
+        }
+
+        return earliest is { } first && first >= at;
+    }
+
     private static bool IsRelevantElement(ProjectElement element) => element switch
     {
         ProjectPropertyElement property => ProjectEvaluator.RelevantProperties.Contains(property.Name, StringComparer.OrdinalIgnoreCase),
-        ProjectItemElement item => item.ItemType is "PackageReference" or "PackageVersion" or "GlobalPackageReference" or "ProjectReference",
+        ProjectItemElement item => RelevantItemTypes.Contains(item.ItemType),
         ProjectImportElement => true,
         _ => false,
     };

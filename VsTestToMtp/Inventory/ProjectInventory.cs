@@ -11,6 +11,5 @@ public sealed record ProjectInventory(
     bool HasTestLibraryDependency,
     IReadOnlyList<string> Frameworks,
     IReadOnlyList<TargetFrameworkState> TargetFrameworks,
-    IReadOnlyList<ProjectReferenceState> ProjectReferences,
     IReadOnlyList<ImportRecord> Imports,
     IReadOnlyList<InventoryBlocker> Blockers);

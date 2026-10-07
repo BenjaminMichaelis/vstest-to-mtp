@@ -49,10 +49,12 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         Project? outer = Load(collection, projectPath, null, displayPath, blockers);
         if (outer is null)
         {
-            return new EvaluatedProject(displayPath, [], [], [], Sorted(blockers));
+            return new EvaluatedProject(displayPath, [], [], Sorted(blockers));
         }
 
-        EvaluationContext context = new(outer, projectPath, formatter);
+        // Every evaluation gets its own context: an import conditioned on $(TargetFramework) only exists in the inner build.
+        EvaluationContext outerContext = new(outer, projectPath, formatter);
+        List<(Project Project, EvaluationContext Context)> evaluated = [(outer, outerContext)];
 
         string[] targetFrameworks = SplitFrameworks(outer.GetPropertyValue("TargetFrameworks"));
         if (targetFrameworks.Length == 0)
@@ -62,9 +64,6 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         }
 
         List<EvaluatedTargetFramework> frameworks = [];
-        List<ProjectReferenceState> references = [];
-        List<Project> evaluated = [];
-
         if (targetFrameworks.Length == 0)
         {
             blockers.Add(new InventoryBlocker(
@@ -72,50 +71,38 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
                 $"'{displayPath}' does not evaluate to a TargetFramework or TargetFrameworks value.",
                 "Set TargetFramework (or TargetFrameworks) in the project, Directory.Build.props or an SDK-style import, then rerun.",
                 displayPath, formatter.Location(projectPath)));
-            frameworks.Add(Capture(outer, string.Empty, context, displayPath, blockers));
-            evaluated.Add(outer);
+            frameworks.Add(Capture(outer, string.Empty, outerContext, displayPath, blockers));
         }
         else
         {
             foreach (string targetFramework in targetFrameworks.Order(StringComparer.Ordinal))
             {
-                Project? project = targetFramework == outer.GetPropertyValue("TargetFramework").Trim() && outer.GetProperty("TargetFramework")?.IsGlobalProperty != true
-                    ? outer
-                    : Load(collection, projectPath, targetFramework, displayPath, blockers);
+                bool outerIsThisFramework = targetFramework == outer.GetPropertyValue("TargetFramework").Trim()
+                    && outer.GetProperty("TargetFramework")?.IsGlobalProperty != true;
+
+                Project? project = outerIsThisFramework ? outer : Load(collection, projectPath, targetFramework, displayPath, blockers);
                 if (project is null)
                 {
                     continue;
                 }
 
-                frameworks.Add(Capture(project, targetFramework, context, displayPath, blockers));
-                evaluated.Add(project);
-            }
-        }
-
-        foreach (Project project in evaluated)
-        {
-            foreach (ProjectItem item in project.GetItems("ProjectReference"))
-            {
-                string full = Path.GetFullPath(item.GetMetadataValue("FullPath"));
-                if (item.Xml is null || references.Any(r => r.Path == formatter.Format(full)))
+                EvaluationContext context = outerIsThisFramework ? outerContext : new EvaluationContext(project, projectPath, formatter);
+                if (!outerIsThisFramework)
                 {
-                    continue;
+                    evaluated.Add((project, context));
                 }
 
-                references.Add(new ProjectReferenceState(formatter.Format(full), selectedProjects.Contains(full), context.Provenance(item.Xml)));
+                frameworks.Add(Capture(project, targetFramework, context, displayPath, blockers));
             }
         }
 
-        List<ImportRecord> imports = CaptureImports(outer, context);
-        _blockerDetector.AddImportBlockers(logger, context, displayPath, blockers);
-        _blockerDetector.AddEarlyIsTestProjectBlockers(outer, context, displayPath, blockers);
+        _blockerDetector.AddImportBlockers(logger, outerContext, displayPath, blockers);
+        foreach ((Project project, EvaluationContext context) in evaluated)
+        {
+            _blockerDetector.AddEarlyIsTestProjectBlockers(project, context, displayPath, blockers);
+        }
 
-        return new EvaluatedProject(
-            displayPath,
-            frameworks,
-            [.. references.OrderBy(r => r.Path, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.Path, StringComparer.Ordinal)],
-            imports,
-            Sorted(blockers));
+        return new EvaluatedProject(displayPath, frameworks, CaptureImports(evaluated), Sorted(blockers));
     }
 
     private Project? Load(ProjectCollection collection, string projectPath, string? targetFramework, string displayPath, List<InventoryBlocker> blockers)
@@ -150,7 +137,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         }
     }
 
-    private static EvaluatedTargetFramework Capture(Project project, string targetFramework, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
+    private EvaluatedTargetFramework Capture(Project project, string targetFramework, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
     {
         List<PropertyState> properties = [];
         foreach (string name in RelevantProperties)
@@ -161,7 +148,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
                 continue;
             }
 
-            properties.Add(CaptureProperty(property, context));
+            properties.Add(CaptureProperty(property, name, context));
         }
 
         Dictionary<string, ProjectItem> central = new(StringComparer.OrdinalIgnoreCase);
@@ -187,10 +174,31 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
 
         ProjectBlockerDetector.AddConditionBlockers(project, context, displayPath, blockers);
 
-        return new EvaluatedTargetFramework(targetFramework, properties, packages);
+        return new EvaluatedTargetFramework(targetFramework, properties, packages, CaptureProjectReferences(project, context));
     }
 
-    private static PropertyState CaptureProperty(ProjectProperty property, EvaluationContext context)
+    private List<ProjectReferenceState> CaptureProjectReferences(Project project, EvaluationContext context)
+    {
+        List<ProjectReferenceState> references = [];
+        foreach (ProjectItem item in project.GetItems("ProjectReference"))
+        {
+            if (item.Xml is null)
+            {
+                continue;
+            }
+
+            string full = Path.GetFullPath(item.GetMetadataValue("FullPath"));
+            references.Add(new ProjectReferenceState(formatter.Format(full), selectedProjects.Contains(full), context.Provenance(item.Xml)));
+        }
+
+        return [.. references
+            .OrderBy(r => r.Path, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.Path, StringComparer.Ordinal)
+            .ThenBy(r => r.Definition.Location.File, StringComparer.Ordinal)
+            .ThenBy(r => r.Definition.Location.Line)];
+    }
+
+    private static PropertyState CaptureProperty(ProjectProperty property, string name, EvaluationContext context)
     {
         PropertySource source = property.IsGlobalProperty ? PropertySource.Global
             : property.IsEnvironmentProperty ? PropertySource.Environment
@@ -211,7 +219,8 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             }
         }
 
-        return new PropertyState(property.Name, property.EvaluatedValue, source, definition, overridden);
+        // MSBuild property names are case-insensitive: report the canonical name, not the spelling the file used.
+        return new PropertyState(name, property.EvaluatedValue, source, definition, overridden);
     }
 
     private static PackageReferenceState CapturePackage(
@@ -256,15 +265,15 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         string versionOverride = item.GetMetadataValue("VersionOverride");
         if (inline.Length > 0)
         {
-            (version, versionSource, versionDefinition) = (inline, PackageVersionSource.Inline, definition);
+            (version, versionSource, versionDefinition) = (inline, PackageVersionSource.Inline, MetadataProvenance(item, "Version", context, definition));
         }
         else if (versionOverride.Length > 0)
         {
-            (version, versionSource, versionDefinition) = (versionOverride, PackageVersionSource.VersionOverride, definition);
+            (version, versionSource, versionDefinition) = (versionOverride, PackageVersionSource.VersionOverride, MetadataProvenance(item, "VersionOverride", context, definition));
         }
         else if (central.TryGetValue(name, out ProjectItem? centralItem) && centralItem.GetMetadataValue("Version") is { Length: > 0 } centralVersion)
         {
-            (version, versionSource, versionDefinition) = (centralVersion, PackageVersionSource.Central, context.Provenance(centralItem.Xml));
+            (version, versionSource, versionDefinition) = (centralVersion, PackageVersionSource.Central, MetadataProvenance(centralItem, "Version", context, context.Provenance(centralItem.Xml)));
         }
         else
         {
@@ -282,29 +291,39 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         return new PackageReferenceState(name, version, versionSource, isGlobal, definition, modifiers, versionDefinition);
     }
 
-    private List<ImportRecord> CaptureImports(Project project, EvaluationContext context)
+    /// <summary>
+    /// Where the winning value of an item's metadata was declared: the Include, a later Update, or an item definition.
+    /// Falls back to <paramref name="fallback"/> when MSBuild does not expose the declaring element.
+    /// </summary>
+    private static Provenance MetadataProvenance(ProjectItem item, string metadataName, EvaluationContext context, Provenance fallback) =>
+        item.GetMetadata(metadataName)?.Xml is { } xml ? context.Provenance(xml) : fallback;
+
+    private List<ImportRecord> CaptureImports(IEnumerable<(Project Project, EvaluationContext Context)> evaluated)
     {
         List<ImportRecord> imports = [];
-        foreach (ResolvedImport import in project.Imports)
+        foreach ((Project project, EvaluationContext context) in evaluated)
         {
-            string file = import.ImportedProject.FullPath;
-            if (!context.IsRepositoryFile(file) || import.ImportingElement is null)
+            foreach (ResolvedImport import in project.Imports)
             {
-                continue;
-            }
+                string file = import.ImportedProject.FullPath;
+                if (!context.IsRepositoryFile(file) || import.ImportingElement is null)
+                {
+                    continue;
+                }
 
-            ProjectImportElement element = import.ImportingElement;
-            bool isImplicit = !string.IsNullOrEmpty(element.Sdk) || !context.IsRepositoryFile(element.ContainingProject.FullPath);
-            ImportRecord record = new(
-                formatter.Format(file),
-                KindOf(file),
-                isImplicit,
-                IsRepositoryFile: true,
-                context.LocationOf(element),
-                EvaluationContext.JoinConditions(element));
-            if (!imports.Contains(record))
-            {
-                imports.Add(record);
+                ProjectImportElement element = import.ImportingElement;
+                bool isImplicit = !string.IsNullOrEmpty(element.Sdk) || !context.IsRepositoryFile(element.ContainingProject.FullPath);
+                ImportRecord record = new(
+                    formatter.Format(file),
+                    KindOf(file),
+                    isImplicit,
+                    IsRepositoryFile: true,
+                    context.LocationOf(element),
+                    EvaluationContext.JoinConditions(element));
+                if (!imports.Contains(record))
+                {
+                    imports.Add(record);
+                }
             }
         }
 
