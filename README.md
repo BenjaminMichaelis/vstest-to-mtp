@@ -2,7 +2,7 @@
 
 A .NET global tool that migrates .NET test projects from [VSTest](https://github.com/microsoft/vstest) to [Microsoft.Testing.Platform (MTP)](https://learn.microsoft.com/dotnet/core/testing/microsoft-testing-platform-intro) for use with `dotnet test`.
 
-> **Status:** This is an early scaffold. The CLI entry point, packaging and CI are set up, but no migration behavior has been implemented yet.
+> **Status:** This is an early scaffold. The CLI entry point, packaging and CI are set up. The read-only project inventory (see below) exists as a library, but no migration behavior has been implemented yet.
 
 ## Install
 
@@ -27,6 +27,12 @@ dotnet build
 dotnet test --no-build
 dotnet run --project VsTestToMtp -- --help
 ```
+
+### Project inventory
+
+`VsTestToMtp.Inventory.InventoryBuilder.Build(path)` inventories a `.csproj`, `.sln` or `.slnx` without modifying anything: exact solution membership, MSBuild-evaluated properties, package references and project references per target framework (with file/line, condition and import-chain provenance), the imported `Directory.Build.props/targets` and `Directory.Packages.props`, the effective `global.json`, and CI/script files (generated and hidden directories are skipped). Projects are classified as test applications from evaluated `IsTestProject` and package evidence declared in the project itself, never from file names. Anything that cannot be determined (missing imports, evaluation failures, environment-dependent conditions, `IsTestProject` conditions in `Directory.Build.props`, ...) is reported as an actionable blocker instead of a guess.
+
+Evaluation uses the .NET SDK's MSBuild (located with `Microsoft.Build.Locator`, honoring `global.json`), so an installed SDK is required at runtime. Nothing is restored or built, and `obj/*.nuget.g.*` files are ignored so results do not depend on restore state.
 
 ### VSTest migration fixtures
 
