@@ -12,8 +12,6 @@ using VsTestToMtp.Inventory;
 [NotInParallel("MSBuildEvaluation")]
 public class InventoryEnvironmentTests
 {
-    private static bool IsCaseInsensitiveFileSystem => OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
-
     [Test]
     public async Task UnsatisfiableGlobalJson_IsReportedAsMsBuildNotFound_AndDoesNotPoisonLaterSelections()
     {
@@ -42,7 +40,6 @@ public class InventoryEnvironmentTests
         if (sdks.Length < 2)
         {
             Skip.Test("Needs at least two installed .NET SDKs.");
-            return;
         }
 
         static string Pin(Version sdk) => $"{{ \"sdk\": {{ \"version\": \"{sdk}\", \"rollForward\": \"disable\" }} }}";
@@ -59,20 +56,9 @@ public class InventoryEnvironmentTests
     }
 
     [Test]
+    [SkipUnlessDirectoryLockingSupported]
     public async Task UnreadableDirectory_IsReportedAsBlocker_AndRestOfInventoryIsKept()
     {
-        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-        {
-            Skip.Test("Unsupported platform.");
-            return;
-        }
-
-        if (!OperatingSystem.IsWindows() && Environment.UserName == "root")
-        {
-            Skip.Test("Root can read any directory.");
-            return;
-        }
-
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject("App/App.csproj")
             .Write("scripts/build.ps1", "dotnet build")
@@ -93,14 +79,9 @@ public class InventoryEnvironmentTests
     }
 
     [Test]
+    [SkipOnCaseInsensitivePaths]
     public async Task ProjectReference_DifferingOnlyByCase_IsNotInSelectionOnCaseSensitiveFileSystems()
     {
-        if (IsCaseInsensitiveFileSystem)
-        {
-            Skip.Test("Requires a case-sensitive file system.");
-            return;
-        }
-
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject("A/A.csproj")
             .WriteProject("a/a.csproj")
