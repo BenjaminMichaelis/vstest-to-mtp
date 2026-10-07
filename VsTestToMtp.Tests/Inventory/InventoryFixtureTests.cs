@@ -71,14 +71,16 @@ public class InventoryFixtureTests
         foreach (PackageReferenceState package in packages)
         {
             await Assert.That(package.Definition.Location.File).IsEqualTo(TestProjectPath);
-            await Assert.That(package.Definition.Location.Line).IsGreaterThan(0);
+            await Assert.That(LineAt(fixture, package.Definition.Location)).Contains($"Include=\"{package.Name}\"");
             await Assert.That(package.Version).IsNotNull();
 
             if (fixture.UsesCentralPackageManagement)
             {
                 await Assert.That(package.VersionSource).IsEqualTo(PackageVersionSource.Central);
                 await Assert.That(package.VersionDefinition!.Location.File).IsEqualTo("Directory.Packages.props");
-                await Assert.That(package.VersionDefinition.Location.Line).IsGreaterThan(0);
+                string centralLine = LineAt(fixture, package.VersionDefinition.Location);
+                await Assert.That(centralLine).Contains($"Include=\"{package.Name}\"");
+                await Assert.That(centralLine).Contains($"Version=\"{package.Version}\"");
             }
             else
             {
@@ -155,6 +157,10 @@ public class InventoryFixtureTests
         await Assert.That(result.Projects.Select(p => p.Path)).IsEquivalentTo([TestProjectPath]);
         await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.TestApplication);
     }
+
+    // The text of the line a location points at, read from the committed fixture.
+    private static string LineAt(FixtureInfo fixture, SourceLocation location) =>
+        File.ReadAllLines(Path.Combine(fixture.RootPath, location.File.Replace('/', Path.DirectorySeparatorChar)))[location.Line - 1];
 
     // MSBuild evaluation is slow, so evaluate each fixture once and share the (immutable) result between tests.
     private static readonly ConcurrentDictionary<string, Lazy<InventoryResult>> Cache = new();

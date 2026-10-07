@@ -19,10 +19,15 @@ internal sealed class ImportLogger : ILogger
 
     private void OnMessage(object sender, BuildMessageEventArgs args)
     {
-        // A skipped import because of a false condition carries no imported file; missing/empty/invalid ones do.
-        if (args is ProjectImportedEventArgs { ImportIgnored: true, ImportedProjectFile: { Length: > 0 } imported } import)
+        // Missing, invalid and empty imports are all "ignored" (as are false conditions); the detector tells them apart.
+        if (args is ProjectImportedEventArgs { ImportIgnored: true } import)
         {
-            Skipped.Add(new SkippedImport(imported, import.UnexpandedProject ?? imported, import.ProjectFile ?? string.Empty, import.LineNumber, import.ColumnNumber));
+            Skipped.Add(new SkippedImport(
+                import.ImportedProjectFile,
+                import.UnexpandedProject ?? string.Empty,
+                import.ProjectFile ?? string.Empty,
+                import.LineNumber,
+                import.ColumnNumber));
         }
     }
 }

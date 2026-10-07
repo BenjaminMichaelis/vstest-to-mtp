@@ -40,6 +40,25 @@ public sealed class ScenarioWorkspace : IDisposable
     public ScenarioWorkspace WriteSlnx(string relativePath, params string[] projects) =>
         Write(relativePath, $"<Solution>\n  <Folder Name=\"/all/\">\n{string.Join("\n", projects.Select(p => $"    <Project Path=\"{p}\" />"))}\n  </Folder>\n</Solution>\n");
 
+    /// <summary>
+    /// The 1-based line of the <paramref name="occurrence"/>th line of <paramref name="relativePath"/> containing
+    /// <paramref name="text"/>, so provenance assertions follow the file instead of hard-coded line numbers.
+    /// </summary>
+    public int LineOf(string relativePath, string text, int occurrence = 1)
+    {
+        string[] lines = File.ReadAllLines(PathOf(relativePath));
+        int found = 0;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (lines[i].Contains(text, StringComparison.Ordinal) && ++found == occurrence)
+            {
+                return i + 1;
+            }
+        }
+
+        throw new InvalidOperationException($"'{text}' (occurrence {occurrence}) not found in '{relativePath}'.");
+    }
+
     public InventoryResult Inventory(string selection) =>
         InventoryBuilder.Build(PathOf(selection), new InventoryOptions(RootPath));
 

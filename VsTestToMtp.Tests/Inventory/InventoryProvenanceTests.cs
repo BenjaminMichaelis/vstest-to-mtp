@@ -85,10 +85,11 @@ public class InventoryProvenanceTests
 
         await Assert.That(nunit.Version).IsEqualTo("2.0.0");
         await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.Inline);
-        await Assert.That(nunit.Definition.Location.Line).IsEqualTo(6);
+        await Assert.That(nunit.Definition.Location.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "Include=\"NUnit\""));
         await Assert.That(nunit.VersionDefinition!.Location.File).IsEqualTo("App/App.csproj");
-        await Assert.That(nunit.VersionDefinition.Location.Line).IsEqualTo(7);
-        await Assert.That(nunit.Modifiers.Select(m => m.Location.Line)).IsEquivalentTo([7]);
+        int update = workspace.LineOf("App/App.csproj", "Update=\"NUnit\"");
+        await Assert.That(nunit.VersionDefinition.Location.Line).IsEqualTo(update);
+        await Assert.That(nunit.Modifiers.Select(m => m.Location.Line)).IsEquivalentTo([update]);
     }
 
     [Test]
@@ -113,7 +114,7 @@ public class InventoryProvenanceTests
         await Assert.That(nunit.Version).IsEqualTo("4.9.0");
         await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.Central);
         await Assert.That(nunit.VersionDefinition!.Location.File).IsEqualTo("Directory.Packages.props");
-        await Assert.That(nunit.VersionDefinition.Location.Line).IsEqualTo(7);
+        await Assert.That(nunit.VersionDefinition.Location.Line).IsEqualTo(workspace.LineOf("Directory.Packages.props", "Update=\"NUnit\""));
     }
 
     [Test]

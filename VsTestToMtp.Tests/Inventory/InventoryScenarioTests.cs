@@ -172,7 +172,7 @@ public class InventoryScenarioTests
         await Assert.That(specs.Classification).IsEqualTo(ProjectClassification.TestApplication);
         PropertyState property = specs.TargetFrameworks.Single().GetProperty("IsTestProject")!;
         await Assert.That(property.Definition!.Location.File).IsEqualTo("Directory.Build.props");
-        await Assert.That(property.Definition.Location.Line).IsEqualTo(3);
+        await Assert.That(property.Definition.Location.Line).IsEqualTo(workspace.LineOf("Directory.Build.props", "<IsTestProject>"));
         await Assert.That(property.Definition.Conditions).IsEquivalentTo(["$(MSBuildProjectName.EndsWith('.Specs'))"]);
         await Assert.That(result.Projects.Single(p => p.Name == "A").Classification).IsEqualTo(ProjectClassification.Production);
     }
@@ -267,7 +267,7 @@ public class InventoryScenarioTests
         InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.MissingImport);
         await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
         await Assert.That(blocker.Location!.File).IsEqualTo("App/App.csproj");
-        await Assert.That(blocker.Location.Line).IsEqualTo(5);
+        await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "<Import Project=\"missing.props\""));
         await Assert.That(blocker.Remediation).IsNotEmpty();
     }
 
@@ -278,6 +278,71 @@ public class InventoryScenarioTests
             .WriteProject("App/App.csproj", "  <Import Project=\"missing.props\" Condition=\"Exists('missing.props')\" />");
 
         await Assert.That(workspace.Inventory("App/App.csproj").Blockers).IsEmpty();
+    }
+
+    [Test]
+    public async Task UnconditionalImportThatResolvesToAnEmptyPath_IsAMissingImport()
+    {
+        // No parent Directory.Build.props exists, so GetPathOfFileAbove expands to nothing.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Build.props", "<Project>\n  <Import Project=\"$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))\" />\n</Project>")
+            .WriteProject("App/App.csproj");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.MissingImport);
+        await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+        await Assert.That(blocker.Location!.File).IsEqualTo("Directory.Build.props");
+        await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("Directory.Build.props", "GetPathOfFileAbove"));
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+    }
+
+    [Test]
+    public async Task GuardedImportThatResolvesToAnEmptyPath_IsNotABlocker()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Build.props", "<Project>\n  <Import Project=\"$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))\" Condition=\"'$([MSBuild]::GetPathOfFileAbove(`Directory.Build.props`, `$(MSBuildThisFileDirectory)../`))' != ''\" />\n</Project>")
+            .WriteProject("App/App.csproj");
+
+        await Assert.That(workspace.Inventory("App/App.csproj").Projects.Single().Blockers).IsEmpty();
+    }
+
+    [Test]
+    public async Task IsTestProject_IsEvaluatedPerTargetFramework()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <PropertyGroup Condition=\"'$(TargetFramework)' == 'net10.0'\">\n    <IsTestProject>true</IsTestProject>\n  </PropertyGroup>",
+                "<TargetFrameworks>net10.0;net8.0</TargetFrameworks>");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        TargetFrameworkState net10 = project.TargetFrameworks.Single(t => t.TargetFramework == "net10.0");
+        TargetFrameworkState net8 = project.TargetFrameworks.Single(t => t.TargetFramework == "net8.0");
+        await Assert.That(net10.Classification).IsEqualTo(ProjectClassification.TestApplication);
+        await Assert.That(net10.GetProperty("IsTestProject")!.Definition!.Conditions).IsEquivalentTo(["'$(TargetFramework)' == 'net10.0'"]);
+        await Assert.That(net8.Classification).IsEqualTo(ProjectClassification.Production);
+        await Assert.That(net8.GetProperty("IsTestProject")).IsNull();
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Mixed);
+    }
+
+    [Test]
+    public async Task RestoreOutput_DoesNotChangeTheResult()
+    {
+        // Microsoft.NET.Test.Sdk's props set IsTestProject=true for any project that references it, which would make a
+        // restored production project look like a test application. Restore output is ignored, so restoring changes nothing.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("Microsoft.NET.Test.Sdk|18.0.0"));
+        ProjectInventory before = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        workspace.Write("App/obj/App.csproj.nuget.g.props", "<Project>\n  <PropertyGroup>\n    <IsTestProject>true</IsTestProject>\n  </PropertyGroup>\n</Project>");
+        ProjectInventory after = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(before.Classification).IsEqualTo(ProjectClassification.Production);
+        await Assert.That(after.Classification).IsEqualTo(ProjectClassification.Production);
+        await Assert.That(after.TargetFrameworks.Single().GetProperty("IsTestProject")).IsNull();
+        await Assert.That(after.Imports.Any(i => i.File.Contains("/obj/", StringComparison.Ordinal))).IsFalse();
     }
 
     [Test]
@@ -321,7 +386,7 @@ public class InventoryScenarioTests
 
         InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.IsTestProjectEarlyCondition);
         await Assert.That(blocker.Location!.File).IsEqualTo("Directory.Build.props");
-        await Assert.That(blocker.Location.Line).IsEqualTo(2);
+        await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("Directory.Build.props", "$(IsTestProject)"));
         await Assert.That(blocker.Remediation).Contains("Directory.Build.targets");
     }
 

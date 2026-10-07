@@ -20,7 +20,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
         "PackageReference", "PackageVersion", "GlobalPackageReference", "ProjectReference",
     };
 
-    public void AddImportBlockers(ImportLogger logger, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
+    public void AddImportBlockers(Project project, ImportLogger logger, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
     {
         foreach (SkippedImport skipped in logger.Skipped)
         {
@@ -31,9 +31,22 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             }
 
             SourceLocation location = formatter.Location(importingFile, skipped.Line, skipped.Column);
-            if (skipped.ImportedFile is null || !File.Exists(skipped.ImportedFile))
+            if (string.IsNullOrEmpty(skipped.ImportedFile))
             {
-                string target = skipped.ImportedFile is null ? skipped.UnexpandedProject : formatter.Format(skipped.ImportedFile);
+                // Either a false condition (fine) or an expression that expanded to nothing. Only an import with no
+                // condition at all can be the latter for certain, so only that one is reported.
+                if (IsUnconditionalImport(project, importingFile, skipped))
+                {
+                    blockers.Add(new InventoryBlocker(
+                        BlockerCodes.MissingImport, BlockerSeverity.Error,
+                        $"Import '{skipped.UnexpandedProject}' at {location} resolves to an empty path, so the evaluated state is incomplete.",
+                        "Make sure the imported file exists (for GetPathOfFileAbove, that a parent file exists), or guard the import with Condition=\"Exists('...')\" if it is intentionally optional.",
+                        displayPath, location));
+                }
+            }
+            else if (!File.Exists(skipped.ImportedFile))
+            {
+                string target = formatter.Format(skipped.ImportedFile);
                 blockers.Add(new InventoryBlocker(
                     BlockerCodes.MissingImport, BlockerSeverity.Error,
                     $"Import '{target}' at {location} does not resolve to an existing file, so the evaluated state is incomplete.",
@@ -49,6 +62,15 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                     displayPath, location));
             }
         }
+    }
+
+    private static bool IsUnconditionalImport(Project project, string importingFile, SkippedImport skipped)
+    {
+        IEnumerable<ProjectRootElement> roots = [project.Xml, .. project.Imports.Select(i => i.ImportedProject)];
+        return roots
+            .Where(r => PathComparison.Equal(r.FullPath, importingFile))
+            .SelectMany(r => r.AllChildren.OfType<ProjectImportElement>())
+            .Any(e => e.Location.Line == skipped.Line && EvaluationContext.Conditions(e).Count == 0);
     }
 
     /// <summary>

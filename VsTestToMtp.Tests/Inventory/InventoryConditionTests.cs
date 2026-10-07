@@ -28,7 +28,8 @@ public class InventoryConditionTests
 
         await Assert.That(blocker.Message).Contains("later");
         await Assert.That(blocker.Location!.File).IsEqualTo("App/App.csproj");
-        await Assert.That(blocker.Location.Line).IsEqualTo(6);
+        // The guarded element is the IsPackable property inside the conditioned PropertyGroup.
+        await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "<IsPackable>"));
     }
 
     [Test]
