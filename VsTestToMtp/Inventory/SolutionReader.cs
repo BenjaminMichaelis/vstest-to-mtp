@@ -45,6 +45,20 @@ internal static class SolutionReader
 
     private static Selection ResolveDirectory(string directory, PathFormatter formatter)
     {
+        try
+        {
+            return ResolveListedDirectory(directory, formatter);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Failed("directory", directory, BlockerCodes.UnreadableDirectory,
+                $"'{formatter.Format(directory)}' could not be listed: {ex.Message}",
+                "Grant read access to the directory, or pass the solution or project file directly.", formatter);
+        }
+    }
+
+    private static Selection ResolveListedDirectory(string directory, PathFormatter formatter)
+    {
         string[] solutions =
         [
             .. Directory.EnumerateFiles(directory, "*.sln"),

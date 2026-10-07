@@ -98,7 +98,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             }
         }
 
-        _blockerDetector.AddImportBlockers([.. evaluated.Select(e => e.Project)], logger, outerContext, displayPath, blockers);
+        _blockerDetector.AddImportBlockers(logger, outerContext, displayPath, blockers);
         foreach ((Project project, EvaluationContext context) in evaluated)
         {
             _blockerDetector.AddEarlyIsTestProjectBlockers(project, context, displayPath, blockers);

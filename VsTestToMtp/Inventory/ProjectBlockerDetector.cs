@@ -20,7 +20,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
         "PackageReference", "PackageVersion", "GlobalPackageReference", "ProjectReference",
     };
 
-    public void AddImportBlockers(IReadOnlyList<Project> projects, ImportLogger logger, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
+    public void AddImportBlockers(ImportLogger logger, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
     {
         foreach (SkippedImport skipped in logger.Skipped)
         {
@@ -33,16 +33,13 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             SourceLocation location = formatter.Location(importingFile, skipped.Line, skipped.Column);
             if (string.IsNullOrEmpty(skipped.ImportedFile))
             {
-                // Either a false condition (fine) or an expression that expanded to nothing. Only an import with no
-                // condition at all can be the latter for certain, so only that one is reported.
-                if (IsUnconditionalImport(projects, importingFile, skipped))
-                {
-                    blockers.Add(new InventoryBlocker(
-                        BlockerCodes.MissingImport, BlockerSeverity.Error,
-                        $"Import '{skipped.UnexpandedProject}' at {location} resolves to an empty path, so the evaluated state is incomplete.",
-                        "Make sure the imported file exists (for GetPathOfFileAbove, that a parent file exists), or guard the import with Condition=\"Exists('...')\" if it is intentionally optional.",
-                        displayPath, location));
-                }
+                // MSBuild does not log imports skipped for a false condition, so an ignored import with no file
+                // is one whose condition held but whose path expanded to nothing.
+                blockers.Add(new InventoryBlocker(
+                    BlockerCodes.MissingImport, BlockerSeverity.Error,
+                    $"Import '{skipped.UnexpandedProject}' at {location} resolves to an empty path, so the evaluated state is incomplete.",
+                    "Make sure the imported file exists (for GetPathOfFileAbove, that a parent file exists), or guard the import with Condition=\"Exists('...')\" if it is intentionally optional.",
+                    displayPath, location));
             }
             else if (!File.Exists(skipped.ImportedFile))
             {
@@ -62,16 +59,6 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                     displayPath, location));
             }
         }
-    }
-
-    private static bool IsUnconditionalImport(IReadOnlyList<Project> projects, string importingFile, SkippedImport skipped)
-    {
-        // Skipped imports come from every evaluation (including inner target-framework builds), so search all of their graphs.
-        IEnumerable<ProjectRootElement> roots = projects.SelectMany(p => (IEnumerable<ProjectRootElement>)[p.Xml, .. p.Imports.Select(i => i.ImportedProject)]);
-        return roots
-            .Where(r => PathComparison.Equal(r.FullPath, importingFile))
-            .SelectMany(r => r.AllChildren.OfType<ProjectImportElement>())
-            .Any(e => e.Location.Line == skipped.Line && EvaluationContext.Conditions(e).Count == 0);
     }
 
     /// <summary>

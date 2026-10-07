@@ -80,6 +80,24 @@ public class InventoryEnvironmentTests
 
     [Test]
     [SkipUnlessReadDenialSupported]
+    public async Task UnreadableSelectedDirectory_IsReportedAsBlocker_InsteadOfThrowing()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("sub/App/App.csproj");
+
+        using (Lock(workspace.PathOf("sub")))
+        {
+            InventoryResult result = InventoryBuilder.Build(workspace.PathOf("sub"), new InventoryOptions(workspace.RootPath));
+
+            await Assert.That(result.Projects).IsEmpty();
+            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCodes.UnreadableDirectory && b.Severity == BlockerSeverity.Error);
+            await Assert.That(blocker.Location!.File).IsEqualTo("sub");
+            await Assert.That(blocker.Remediation).IsNotEmpty();
+        }
+    }
+
+    [Test]
+    [SkipUnlessReadDenialSupported]
     public async Task UnreadableGlobalJson_IsReportedAsBlocker_InsteadOfThrowing()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()

@@ -343,6 +343,33 @@ public class InventoryScenarioTests
     }
 
     [Test]
+    public async Task ImportWhoseConditionHoldsButPathIsEmpty_IsAMissingImport()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <PropertyGroup>\n    <Flag>true</Flag>\n  </PropertyGroup>\n  <Import Project=\"$(VSTEST_TO_MTP_MISSING_PATH)\" Condition=\"'$(Flag)' == 'true'\" />");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.MissingImport);
+        await Assert.That(blocker.Location!.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "<Import Project"));
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+    }
+
+    [Test]
+    public async Task ImportWhoseConditionIsFalse_IsNotABlocker_EvenIfItsPathIsEmpty()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <Import Project=\"$(VSTEST_TO_MTP_MISSING_PATH)\" Condition=\"'$(VSTEST_TO_MTP_MISSING_FLAG)' == 'true'\" />");
+
+        await Assert.That(workspace.Inventory("App/App.csproj").Projects.Single().Blockers.Select(b => b.Code))
+            .DoesNotContain(BlockerCodes.MissingImport);
+    }
+
+    [Test]
     public async Task GuardedImportThatResolvesToAnEmptyPath_IsNotABlocker()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
