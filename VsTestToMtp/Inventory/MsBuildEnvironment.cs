@@ -14,6 +14,13 @@ internal static class MsBuildEnvironment
     private static string? s_registeredPath;
     private static bool s_registeredExternally;
 
+    // Reads the loaded assembly list by name so this type never references Microsoft.Build types.
+    private static string? LoadedMsBuildDirectory() =>
+        AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => a.GetName().Name == "Microsoft.Build" && !a.IsDynamic && a.Location.Length > 0)?.Location is { } location
+            ? Path.GetDirectoryName(location)
+            : null;
+
     /// <summary>
     /// Makes sure the SDK that <c>dotnet</c> would select for <paramref name="workingDirectory"/> (honoring
     /// <c>global.json</c>) is the registered MSBuild. MSBuild registration is process-wide, so once an SDK has been
@@ -59,14 +66,15 @@ internal static class MsBuildEnvironment
                 {
                     if (MSBuildLocator.IsRegistered)
                     {
-                        // Another component already registered MSBuild; we cannot know which SDK it is.
+                        // Another component already registered MSBuild; verified against the loaded assembly below.
                         s_registeredExternally = true;
+                    }
+                    else
+                    {
+                        MSBuildLocator.RegisterInstance(instance);
+                        s_registeredPath = instance.MSBuildPath;
                         return true;
                     }
-
-                    MSBuildLocator.RegisterInstance(instance);
-                    s_registeredPath = instance.MSBuildPath;
-                    return true;
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -75,14 +83,17 @@ internal static class MsBuildEnvironment
                 }
             }
 
-            if (s_registeredExternally || PathComparison.Equal(s_registeredPath!, instance.MSBuildPath))
+            // When another component registered MSBuild, the only evidence of which SDK it is is where Microsoft.Build was loaded from.
+            string? registered = s_registeredExternally ? LoadedMsBuildDirectory() : s_registeredPath;
+            if (registered is not null && PathComparison.Equal(registered, instance.MSBuildPath))
             {
                 return true;
             }
 
-            (errorCode, error) = (BlockerCodes.MsBuildSdkMismatch,
-                $"This process already loaded MSBuild from '{s_registeredPath}', but this selection resolves to '{instance.MSBuildPath}' "
-                + "(a different global.json or SDK). MSBuild can only be loaded once per process, so evaluating it would use the wrong SDK.");
+            (errorCode, error) = (BlockerCodes.MsBuildSdkMismatch, registered is null
+                ? $"Another component already registered MSBuild in this process and its SDK cannot be determined, so it cannot be verified to match '{instance.MSBuildPath}' for this selection."
+                : $"This process already loaded MSBuild from '{registered}', but this selection resolves to '{instance.MSBuildPath}' "
+                  + "(a different global.json or SDK). MSBuild can only be loaded once per process, so evaluating it would use the wrong SDK.");
             return false;
         }
     }

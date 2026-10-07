@@ -16,6 +16,8 @@ public static class BlockerCodes
     public const string MissingImport = "MissingImport";
     public const string NoTargetFramework = "NoTargetFramework";
     public const string MalformedGlobalJson = "MalformedGlobalJson";
+    public const string UnreadableGlobalJson = "UnreadableGlobalJson";
+    public const string InvalidIsTestProject = "InvalidIsTestProject";
     public const string ConditionDependsOnUnsetProperty = "ConditionDependsOnUnsetProperty";
     public const string ConditionDependsOnEnvironment = "ConditionDependsOnEnvironment";
     public const string IsTestProjectEarlyCondition = "IsTestProjectEarlyCondition";

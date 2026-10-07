@@ -56,7 +56,7 @@ public class InventoryEnvironmentTests
     }
 
     [Test]
-    [SkipUnlessDirectoryLockingSupported]
+    [SkipUnlessReadDenialSupported]
     public async Task UnreadableDirectory_IsReportedAsBlocker_AndRestOfInventoryIsKept()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
@@ -79,6 +79,25 @@ public class InventoryEnvironmentTests
     }
 
     [Test]
+    [SkipUnlessReadDenialSupported]
+    public async Task UnreadableGlobalJson_IsReportedAsBlocker_InsteadOfThrowing()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("global.json", "{ \"sdk\": { \"version\": \"10.0.100\" } }")
+            .WriteProject("App/App.csproj");
+
+        using (Lock(workspace.PathOf("global.json")))
+        {
+            InventoryResult result = workspace.Inventory("App/App.csproj");
+
+            await Assert.That(result.GlobalJson).IsNull();
+            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCodes.UnreadableGlobalJson);
+            await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+            await Assert.That(blocker.Location!.File).IsEqualTo("global.json");
+        }
+    }
+
+    [Test]
     [SkipOnCaseInsensitivePaths]
     public async Task ProjectReference_DifferingOnlyByCase_IsNotInSelectionOnCaseSensitiveFileSystems()
     {
@@ -95,33 +114,48 @@ public class InventoryEnvironmentTests
         await Assert.That(reference.IsInSelection).IsFalse();
     }
 
-    // Denies listing the directory for the current user (ACL on Windows, mode bits elsewhere) until disposed.
-    private static Restore Lock(string directory) =>
-        OperatingSystem.IsWindows() ? LockWithAcl(directory) : LockWithMode(directory);
+    // Denies reading the file or listing the directory for the current user (ACL on Windows, mode bits elsewhere) until disposed.
+    private static Restore Lock(string path) =>
+        OperatingSystem.IsWindows() ? LockWithAcl(path) : LockWithMode(path);
 
     [SupportedOSPlatform("windows")]
-    private static Restore LockWithAcl(string directory)
+    private static Restore LockWithAcl(string path)
     {
-        DirectoryInfo info = new(directory);
         SecurityIdentifier me = WindowsIdentity.GetCurrent().User!;
         FileSystemAccessRule deny = new(me, FileSystemRights.ListDirectory | FileSystemRights.ReadData, AccessControlType.Deny);
-        DirectorySecurity security = info.GetAccessControl();
-        security.AddAccessRule(deny);
-        info.SetAccessControl(security);
+
+        if (Directory.Exists(path))
+        {
+            DirectoryInfo directory = new(path);
+            DirectorySecurity security = directory.GetAccessControl();
+            security.AddAccessRule(deny);
+            directory.SetAccessControl(security);
+            return new Restore(() =>
+            {
+                DirectorySecurity current = directory.GetAccessControl();
+                current.RemoveAccessRule(deny);
+                directory.SetAccessControl(current);
+            });
+        }
+
+        FileInfo file = new(path);
+        FileSecurity fileSecurity = file.GetAccessControl();
+        fileSecurity.AddAccessRule(deny);
+        file.SetAccessControl(fileSecurity);
         return new Restore(() =>
         {
-            DirectorySecurity current = info.GetAccessControl();
+            FileSecurity current = file.GetAccessControl();
             current.RemoveAccessRule(deny);
-            info.SetAccessControl(current);
+            file.SetAccessControl(current);
         });
     }
 
     [UnsupportedOSPlatform("windows")]
-    private static Restore LockWithMode(string directory)
+    private static Restore LockWithMode(string path)
     {
-        UnixFileMode original = File.GetUnixFileMode(directory);
-        File.SetUnixFileMode(directory, UnixFileMode.None);
-        return new Restore(() => File.SetUnixFileMode(directory, original));
+        UnixFileMode original = File.GetUnixFileMode(path);
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        return new Restore(() => File.SetUnixFileMode(path, original));
     }
 
     private sealed class Restore(Action undo) : IDisposable

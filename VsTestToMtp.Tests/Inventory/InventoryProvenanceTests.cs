@@ -118,6 +118,22 @@ public class InventoryProvenanceTests
     }
 
     [Test]
+    public async Task PackageVersion_IsIgnored_WhenCentralPackageManagementIsOff()
+    {
+        // NuGet ignores PackageVersion items unless ManagePackageVersionsCentrally is true.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", "<Project>\n  <ItemGroup>\n    <PackageVersion Include=\"NUnit\" Version=\"4.3.2\" />\n  </ItemGroup>\n</Project>")
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("NUnit"));
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(nunit.Version).IsNull();
+        await Assert.That(project.Blockers.Select(b => b.Code)).Contains(BlockerCodes.UnresolvedPackageVersion);
+    }
+
+    [Test]
     public async Task PropertyNames_AreCaseInsensitive_AndReportedCanonically()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()

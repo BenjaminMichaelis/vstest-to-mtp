@@ -20,7 +20,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
         "PackageReference", "PackageVersion", "GlobalPackageReference", "ProjectReference",
     };
 
-    public void AddImportBlockers(Project project, ImportLogger logger, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
+    public void AddImportBlockers(IReadOnlyList<Project> projects, ImportLogger logger, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
     {
         foreach (SkippedImport skipped in logger.Skipped)
         {
@@ -35,7 +35,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             {
                 // Either a false condition (fine) or an expression that expanded to nothing. Only an import with no
                 // condition at all can be the latter for certain, so only that one is reported.
-                if (IsUnconditionalImport(project, importingFile, skipped))
+                if (IsUnconditionalImport(projects, importingFile, skipped))
                 {
                     blockers.Add(new InventoryBlocker(
                         BlockerCodes.MissingImport, BlockerSeverity.Error,
@@ -64,9 +64,10 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
         }
     }
 
-    private static bool IsUnconditionalImport(Project project, string importingFile, SkippedImport skipped)
+    private static bool IsUnconditionalImport(IReadOnlyList<Project> projects, string importingFile, SkippedImport skipped)
     {
-        IEnumerable<ProjectRootElement> roots = [project.Xml, .. project.Imports.Select(i => i.ImportedProject)];
+        // Skipped imports come from every evaluation (including inner target-framework builds), so search all of their graphs.
+        IEnumerable<ProjectRootElement> roots = projects.SelectMany(p => (IEnumerable<ProjectRootElement>)[p.Xml, .. p.Imports.Select(i => i.ImportedProject)]);
         return roots
             .Where(r => PathComparison.Equal(r.FullPath, importingFile))
             .SelectMany(r => r.AllChildren.OfType<ProjectImportElement>())
@@ -154,9 +155,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             foreach ((string side, string other) in new[] { (left, right), (right, left) })
             {
                 Match property = PropertyReference().Match(side);
-
-                // Comparing with '' is a deliberate "is it unset?" probe, not a dependency on a value.
-                if (!property.Success || other.Length == 0)
+                if (!property.Success)
                 {
                     continue;
                 }
@@ -168,8 +167,11 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                     continue;
                 }
 
+                // Comparing with '' is a deliberate "is it unset?" probe, so an absent (or later-defined) property is intended.
+                // An environment-provided one still varies between machines, so that is reported either way.
+                bool isUnsetProbe = other.Length == 0;
                 ProjectProperty? value = project.GetProperty(name);
-                if (value is null || IsDefinedOnlyLater(value, evaluatedAt, order))
+                if (!isUnsetProbe && (value is null || IsDefinedOnlyLater(value, evaluatedAt, order)))
                 {
                     string state = value is null ? "which is not set" : "which is only set later in evaluation";
                     blockers.Add(new InventoryBlocker(
@@ -178,7 +180,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                         $"Set '{name}' before this element (for example in Directory.Build.props) or pass it as a global property if the guarded state matters.",
                         displayPath, location));
                 }
-                else if (value.IsEnvironmentProperty)
+                else if (value is { IsEnvironmentProperty: true })
                 {
                     blockers.Add(new InventoryBlocker(
                         BlockerCodes.ConditionDependsOnEnvironment, BlockerSeverity.Warning,

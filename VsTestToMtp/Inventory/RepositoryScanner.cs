@@ -20,7 +20,7 @@ internal static partial class RepositoryScanner
     // Hidden directories that legitimately hold CI definitions.
     private static readonly HashSet<string> HiddenCiDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".github", ".azuredevops", ".azure-pipelines", ".circleci", ".gitlab",
+        ".github", ".azuredevops", ".azure-pipelines", ".circleci",
     };
 
     private static readonly JsonDocumentOptions JsonOptions = new()
@@ -42,7 +42,8 @@ internal static partial class RepositoryScanner
 
             try
             {
-                using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path), JsonOptions);
+                string json = File.ReadAllText(path);
+                using JsonDocument document = JsonDocument.Parse(json, JsonOptions);
                 JsonElement root = document.RootElement;
                 JsonElement sdk = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("sdk", out JsonElement s) ? s : default;
                 JsonElement test = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("test", out JsonElement t) ? t : default;
@@ -56,6 +57,15 @@ internal static partial class RepositoryScanner
                     msbuildSdks.ValueKind == JsonValueKind.Object
                         ? [.. msbuildSdks.EnumerateObject().Select(p => $"{p.Name}/{p.Value}").Order(StringComparer.Ordinal)]
                         : []);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                blockers.Add(new InventoryBlocker(
+                    BlockerCodes.UnreadableGlobalJson, BlockerSeverity.Error,
+                    $"'{formatter.Format(path)}' could not be read: {ex.Message}",
+                    "Grant read access to global.json (or fix the path), then rerun, so the SDK and test runner configuration can be read.",
+                    null, formatter.Location(path)));
+                return null;
             }
             catch (JsonException ex)
             {
@@ -141,6 +151,9 @@ internal static partial class RepositoryScanner
             ".yml" or ".yaml" when name.StartsWith("azure-pipelines", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(parent, ".azure-pipelines", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(parent, ".azuredevops", StringComparison.OrdinalIgnoreCase) => AutomationKind.AzurePipelines,
+            ".yml" or ".yaml" when string.Equals(parent, ".circleci", StringComparison.OrdinalIgnoreCase) => AutomationKind.CircleCi,
+            ".yml" or ".yaml" when name.Equals(".gitlab-ci.yml", StringComparison.OrdinalIgnoreCase)
+                || name.Equals(".gitlab-ci.yaml", StringComparison.OrdinalIgnoreCase) => AutomationKind.GitLabCi,
             ".ps1" => AutomationKind.PowerShellScript,
             ".sh" => AutomationKind.ShellScript,
             ".cmd" or ".bat" => AutomationKind.BatchScript,

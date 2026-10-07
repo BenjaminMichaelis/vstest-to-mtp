@@ -98,7 +98,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             }
         }
 
-        _blockerDetector.AddImportBlockers(outer, logger, outerContext, displayPath, blockers);
+        _blockerDetector.AddImportBlockers([.. evaluated.Select(e => e.Project)], logger, outerContext, displayPath, blockers);
         foreach ((Project project, EvaluationContext context) in evaluated)
         {
             _blockerDetector.AddEarlyIsTestProjectBlockers(project, context, displayPath, blockers);
@@ -153,10 +153,14 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             properties.Add(CaptureProperty(property, name, context));
         }
 
+        // A PackageVersion only supplies versions when Central Package Management is on; NuGet ignores it otherwise.
         Dictionary<string, ProjectItem> central = new(StringComparer.OrdinalIgnoreCase);
-        foreach (ProjectItem version in project.GetItems("PackageVersion"))
+        if (MsBuildBoolean.TryParse(project.GetPropertyValue("ManagePackageVersionsCentrally"), out bool centralManagement) && centralManagement)
         {
-            central[version.EvaluatedInclude] = version;
+            foreach (ProjectItem version in project.GetItems("PackageVersion"))
+            {
+                central[version.EvaluatedInclude] = version;
+            }
         }
 
         List<PackageReferenceState> packages = [];

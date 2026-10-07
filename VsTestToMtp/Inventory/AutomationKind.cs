@@ -4,6 +4,8 @@ public enum AutomationKind
 {
     GitHubWorkflow,
     AzurePipelines,
+    CircleCi,
+    GitLabCi,
     PowerShellScript,
     ShellScript,
     BatchScript,

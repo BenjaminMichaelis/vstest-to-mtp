@@ -26,7 +26,9 @@ internal static class TestProjectClassifier
         }
 
         ProjectClassification[] distinct = [.. states.Select(s => s.Classification).Distinct()];
-        ProjectClassification overall = distinct.Length == 1 ? distinct[0] : ProjectClassification.Mixed;
+        ProjectClassification overall = distinct.Contains(ProjectClassification.Unknown) ? ProjectClassification.Unknown
+            : distinct.Length == 1 ? distinct[0]
+            : ProjectClassification.Mixed;
         if (overall == ProjectClassification.Mixed)
         {
             string summary = string.Join(", ", states.Select(s => $"{s.TargetFramework}: {s.Classification}"));
@@ -69,7 +71,18 @@ internal static class TestProjectClassifier
             TestPackageCatalog.TryGet(p.Name, out TestPackageRole role, out _) && role != TestPackageRole.Runner);
 
         PropertyState? isTestProject = framework.Properties.FirstOrDefault(p => string.Equals(p.Name, "IsTestProject", StringComparison.OrdinalIgnoreCase));
-        if (isTestProject is not null && bool.TryParse(isTestProject.Value, out bool explicitValue))
+        if (isTestProject is { Value.Length: > 0 } && !MsBuildBoolean.TryParse(isTestProject.Value, out _))
+        {
+            // The explicit property is authoritative, so a value that is not a boolean makes the classification undeterminable.
+            blockers.Add(new InventoryBlocker(
+                BlockerCodes.InvalidIsTestProject, BlockerSeverity.Error,
+                $"IsTestProject evaluates to '{isTestProject.Value}' for {framework.TargetFramework}, which is not a boolean.",
+                "Set IsTestProject to true or false (check for a property that expands to something else), then rerun.",
+                project, isTestProject.Definition?.Location));
+            return (ProjectClassification.Unknown, hasLibraryDependency, evidence);
+        }
+
+        if (isTestProject is not null && MsBuildBoolean.TryParse(isTestProject.Value, out bool explicitValue))
         {
             string where = isTestProject.Definition is null ? $"{isTestProject.Source}" : isTestProject.Definition.Location.ToString();
             evidence.Insert(0, $"IsTestProject={isTestProject.Value} at {where}");

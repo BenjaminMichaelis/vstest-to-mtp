@@ -85,6 +85,29 @@ public class InventoryConditionTests
         await Assert.That(Blockers(workspace)).IsEmpty();
     }
 
+    [Test]
+    public async Task EnvironmentProperty_IsFlagged_EvenWhenComparedWithAnEmptyLiteral()
+    {
+        const string variable = "VSTEST_TO_MTP_ENV_FLAG";
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                $"  <PropertyGroup Condition=\"'$({variable})' != ''\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+
+        Environment.SetEnvironmentVariable(variable, "1");
+        try
+        {
+            InventoryBlocker blocker = Blockers(workspace).Single(b => b.Code == BlockerCodes.ConditionDependsOnEnvironment);
+
+            await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Warning);
+            await Assert.That(blocker.Message).Contains(variable);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
     private static IReadOnlyList<InventoryBlocker> Blockers(ScenarioWorkspace workspace) =>
         workspace.Inventory("App/App.csproj").Projects.Single().Blockers;
 }

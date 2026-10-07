@@ -325,6 +325,24 @@ public class InventoryScenarioTests
     }
 
     [Test]
+    public async Task UnconditionalEmptyImport_InsideATargetFrameworkConditionedFile_IsAMissingImport()
+    {
+        // The file with the broken import is only imported by the net10.0 inner build, never by the outer one.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("App/net10.props", "<Project>\n  <Import Project=\"$([MSBuild]::GetPathOfFileAbove('no-such-parent.props', '$(MSBuildThisFileDirectory)../'))\" />\n</Project>")
+            .WriteProject(
+                "App/App.csproj",
+                "  <Import Project=\"net10.props\" Condition=\"'$(TargetFramework)' == 'net10.0'\" />",
+                "<TargetFrameworks>net10.0;net8.0</TargetFrameworks>");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.MissingImport);
+        await Assert.That(blocker.Location!.File).IsEqualTo("App/net10.props");
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+    }
+
+    [Test]
     public async Task GuardedImportThatResolvesToAnEmptyPath_IsNotABlocker()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
@@ -352,6 +370,39 @@ public class InventoryScenarioTests
         await Assert.That(net8.Classification).IsEqualTo(ProjectClassification.Production);
         await Assert.That(net8.GetProperty("IsTestProject")).IsNull();
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Mixed);
+    }
+
+    [Test]
+    public async Task NonBooleanIsTestProject_MakesClassificationUndeterminable()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <PropertyGroup>\n    <IsTestProject>maybe</IsTestProject>\n  </PropertyGroup>\n"
+                + ScenarioWorkspace.PackageReferences("MSTest|4.0.2"));
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.InvalidIsTestProject);
+        await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+        await Assert.That(blocker.Location!.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "<IsTestProject>"));
+    }
+
+    [Test]
+    [Arguments("yes", ProjectClassification.TestApplication)]
+    [Arguments("ON", ProjectClassification.TestApplication)]
+    [Arguments("No", ProjectClassification.Production)]
+    [Arguments("off", ProjectClassification.Production)]
+    public async Task IsTestProject_AcceptsTheBooleanSpellingsMsBuildAccepts(string value, ProjectClassification expected)
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj", $"  <PropertyGroup>\n    <IsTestProject>{value}</IsTestProject>\n  </PropertyGroup>");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.Classification).IsEqualTo(expected);
+        await Assert.That(project.Blockers).IsEmpty();
     }
 
     [Test]
@@ -507,6 +558,8 @@ public class InventoryScenarioTests
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject("App/App.csproj")
+            .Write(".circleci/config.yml", "jobs:\n  test:\n    steps:\n      - run: dotnet test\n")
+            .Write(".gitlab-ci.yml", "test:\n  script: dotnet build\n")
             .Write(".github/workflows/ci.yml", "steps:\n  - run: dotnet test\n")
             .Write(".github/workflows/lint.yaml", "steps:\n  - run: echo lint\n")
             .Write("azure-pipelines.yml", "steps:\n- script: dotnet  test\n")
@@ -524,8 +577,10 @@ public class InventoryScenarioTests
 
         await Assert.That(automation.Select(a => (a.Path, a.Kind, a.MentionsDotNetTest))).IsEquivalentTo(
             [
+                (".circleci/config.yml", AutomationKind.CircleCi, true),
                 (".github/workflows/ci.yml", AutomationKind.GitHubWorkflow, true),
                 (".github/workflows/lint.yaml", AutomationKind.GitHubWorkflow, false),
+                (".gitlab-ci.yml", AutomationKind.GitLabCi, false),
                 ("Makefile", AutomationKind.Makefile, true),
                 ("azure-pipelines.yml", AutomationKind.AzurePipelines, true),
                 ("scripts/build.ps1", AutomationKind.PowerShellScript, false),
