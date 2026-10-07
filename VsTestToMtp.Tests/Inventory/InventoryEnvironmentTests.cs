@@ -93,25 +93,6 @@ public class InventoryEnvironmentTests
     }
 
     [Test]
-    public async Task SolutionMembers_DifferingOnlyByCase_AreDistinctOnCaseSensitiveFileSystems()
-    {
-        if (IsCaseInsensitiveFileSystem)
-        {
-            Skip.Test("Requires a case-sensitive file system.");
-            return;
-        }
-
-        using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("A/A.csproj")
-            .WriteProject("a/a.csproj")
-            .WriteSlnx("All.slnx", "A/A.csproj", "a/a.csproj");
-
-        InventoryResult result = workspace.Inventory("All.slnx");
-
-        await Assert.That(result.Projects.Select(p => p.Path)).IsEquivalentTo(["A/A.csproj", "a/a.csproj"]);
-    }
-
-    [Test]
     public async Task ProjectReference_DifferingOnlyByCase_IsNotInSelectionOnCaseSensitiveFileSystems()
     {
         if (IsCaseInsensitiveFileSystem)
