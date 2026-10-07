@@ -1,0 +1,92 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  # For GitHub Auto Merge to work it must be enabled on the repo.
+  # This can be done with the script here:
+  # https://github.com/BenjaminMichaelis/DotnetTemplates/blob/main/SetupRepo.ps1
+  # See documentation here:
+  # https://docs.github.com/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/automatically-merging-a-pull-request
+  automerge:
+    runs-on: ubuntu-latest
+
+    permissions:
+      pull-requests: write
+      contents: write
+
+    steps:
+      - uses: fastify/github-action-merge-dependabot@v3.15.0
+        with:
+            use-github-auto-merge: true
+
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: "./global.json"
+
+      - name: Restore .NET Tools
+        run: dotnet tool restore
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Enforce formatting
+        run: |
+          .\.github\scripts\Invoke-DotNetFormatStrict.ps1 -DiscoverFromCurrentDirectory
+
+      - name: Build
+        run: dotnet build -p:ContinuousIntegrationBuild=True --no-restore --configuration Release
+
+      - name: Enable Automated Test Report Artifact Upload
+        uses: actions/github-script@v9
+        with:
+          script: |
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env['ACTIONS_RUNTIME_TOKEN']);
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env['ACTIONS_RESULTS_URL']);
+
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity normal --results-directory trx-data --report-trx --report-trx-filename tests.trx
+
+      - name: Generate merged failure playlist from TRX
+        if: always()
+        run: |
+          $trxFiles = Get-ChildItem -Path "trx-data" -Recurse -File -Filter "*.trx" -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+
+          if (-not $trxFiles) {
+            Write-Host "No TRX files found; skipping playlist generation."
+            exit 0
+          }
+
+          New-Item -ItemType Directory -Force test-results | Out-Null
+          dotnet trx-to-vsplaylist convert $trxFiles --output test-results/failed-tests.playlist --skip-empty
+
+      - name: Upload failure playlist
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-tests-playlist
+          path: test-results/failed-tests.playlist
+          if-no-files-found: ignore
