@@ -45,7 +45,4 @@ public static class FixtureCatalog
         new("xunit-v2", UsesCentralPackageManagement: false, BaselineTotalTests),
         new("xunit-v2", UsesCentralPackageManagement: true, BaselineTotalTests),
     ];
-
-    /// <summary>TUnit data source: one <see cref="FixtureInfo"/> per committed fixture.</summary>
-    public static IEnumerable<Func<FixtureInfo>> AllAsDataSource() => All.Select(fixture => (Func<FixtureInfo>)(() => fixture));
 }

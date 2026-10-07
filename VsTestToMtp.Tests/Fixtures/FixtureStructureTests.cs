@@ -24,7 +24,7 @@ public class FixtureStructureTests
     }
 
     [Test]
-    [MethodDataSource(typeof(FixtureCatalog), nameof(FixtureCatalog.AllAsDataSource))]
+    [MethodDataSource(typeof(FixtureDataSources), nameof(FixtureDataSources.All))]
     public async Task Fixture_HasItsOwnGlobalJsonInVsTestMode(FixtureInfo fixture)
     {
         string globalJson = Path.Combine(fixture.RootPath, "global.json");
@@ -38,7 +38,7 @@ public class FixtureStructureTests
     }
 
     [Test]
-    [MethodDataSource(typeof(FixtureCatalog), nameof(FixtureCatalog.AllAsDataSource))]
+    [MethodDataSource(typeof(FixtureDataSources), nameof(FixtureDataSources.All))]
     public async Task Fixture_IsolatesItselfFromRepositoryRootBuildFiles(FixtureInfo fixture)
     {
         await Assert.That(File.Exists(Path.Combine(fixture.RootPath, "Directory.Build.props"))).IsTrue();
@@ -47,7 +47,7 @@ public class FixtureStructureTests
     }
 
     [Test]
-    [MethodDataSource(typeof(FixtureCatalog), nameof(FixtureCatalog.AllAsDataSource))]
+    [MethodDataSource(typeof(FixtureDataSources), nameof(FixtureDataSources.All))]
     public async Task Fixture_CentralPackageManagementMatchesVariant(FixtureInfo fixture)
     {
         XDocument packages = XDocument.Load(Path.Combine(fixture.RootPath, "Directory.Packages.props"));
@@ -70,7 +70,7 @@ public class FixtureStructureTests
     }
 
     [Test]
-    [MethodDataSource(typeof(FixtureCatalog), nameof(FixtureCatalog.AllAsDataSource))]
+    [MethodDataSource(typeof(FixtureDataSources), nameof(FixtureDataSources.All))]
     public async Task Fixture_TestProjectReferencesProductionProject(FixtureInfo fixture)
     {
         await Assert.That(File.Exists(fixture.ProductionProjectPath)).IsTrue();
@@ -87,7 +87,7 @@ public class FixtureStructureTests
     }
 
     [Test]
-    [MethodDataSource(typeof(FixtureCatalog), nameof(FixtureCatalog.AllAsDataSource))]
+    [MethodDataSource(typeof(FixtureDataSources), nameof(FixtureDataSources.All))]
     public async Task Fixture_UsesVsTestPackagesAndNoMtpOptIn(FixtureInfo fixture)
     {
         XElement project = LoadTestProject(fixture);
@@ -114,19 +114,14 @@ public class FixtureStructureTests
 
         foreach (string property in MtpOptInProperties)
         {
-            await Assert.That(project.Descendants(property).Any()).IsFalse();
+            await Assert.That(project.Descendants(property)).IsEmpty();
         }
     }
 
     [Test]
-    [MethodDataSource(typeof(FixtureCatalog), nameof(FixtureCatalog.AllAsDataSource))]
+    [MethodDataSource(typeof(FixtureDataSources), nameof(FixtureDataSources.Xunit))]
     public async Task Fixture_XunitMajorVersionMatchesFramework(FixtureInfo fixture)
     {
-        if (!fixture.Framework.StartsWith("xunit", StringComparison.Ordinal))
-        {
-            return;
-        }
-
         string packageName = fixture.Framework == "xunit-v3" ? "xunit.v3.mtp-off" : "xunit";
         string version = GetPackageVersion(fixture, packageName);
 
