@@ -1,0 +1,2 @@
+<!-- Intentionally empty: stops MSBuild inheriting the repository root's Directory.Build.props. -->
+<Project />

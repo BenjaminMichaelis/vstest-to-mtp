@@ -69,6 +69,17 @@ jobs:
       - name: Test
         run: dotnet test --no-build --configuration Release --verbosity normal --results-directory trx-data --report-trx --report-trx-filename tests.trx
 
+      - name: Build and test VSTest fixtures
+        run: .\.github\scripts\Invoke-FixtureBuildAndTest.ps1
+
+      - name: Verify fixtures are unchanged
+        run: |
+          $changes = git status --porcelain -- fixtures
+          if ($changes) {
+            Write-Host $changes
+            throw 'Building or testing modified the committed fixtures.'
+          }
+
       - name: Generate merged failure playlist from TRX
         if: always()
         run: |

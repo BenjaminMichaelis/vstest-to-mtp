@@ -28,6 +28,10 @@ dotnet test --no-build
 dotnet run --project VsTestToMtp -- --help
 ```
 
+### VSTest migration fixtures
+
+[`fixtures/`](fixtures/README.md) contains checked-in MSTest, NUnit, xUnit v3 and xUnit v2 sample projects (each in plain and Central Package Management variants) generated from the official templates and running under VSTest. Converter tests work on isolated copies of them. CI builds and tests every fixture in place.
+
 ### Packing and installing locally
 
 The tool uses [RID-specific packaging](https://learn.microsoft.com/dotnet/core/tools/rid-specific-tools). A single `dotnet pack` produces self-contained packages for `win-x64`, `linux-x64` and `osx-arm64`, a portable `any` CoreCLR fallback, and a top-level pointer package:
