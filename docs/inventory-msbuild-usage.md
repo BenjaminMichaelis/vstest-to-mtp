@@ -11,7 +11,7 @@ questions MSBuild behavior, add the verified answer here and pin it with a test.
 | Reference `Microsoft.Build` with `ExcludeAssets="runtime"` so it is never shipped; load it from the SDK instead ([Find MSBuild and use its API](https://learn.microsoft.com/visualstudio/msbuild/find-and-use-msbuild-versions)). | `VsTestToMtp.csproj` references it with `ExcludeAssets="runtime" PrivateAssets="all"`. The output contains no `Microsoft.Build.*.dll` except `Microsoft.Build.Locator.dll`. |
 | Do not set `ExcludeAssets` on `Microsoft.Build.Locator`. | Referenced normally. |
 | Register MSBuild before any `Microsoft.Build` type is touched, and not in a method that references MSBuild types (same page). | `MsBuildEnvironment` references only Locator types; `InventoryBuilder` calls it from a separate un-inlined method before the MSBuild-using method. |
-| The `Microsoft.Build` package version must be less than or equal to the oldest MSBuild you support (same page). | We compile against 18.0.2. Verified (see below) to evaluate correctly under the MSBuild of SDK 6.0, 9.0 and 10.0. |
+| The `Microsoft.Build` package version must be less than or equal to the oldest MSBuild you support (same page). | We compile against 17.8.43, the MSBuild of SDK 8.0.100 (earlier 17.8.x packages carry a known high-severity advisory, NU1903), so the oldest supported SDK is **8.0**. A selection that resolves to an older SDK is rejected with `MsBuildSdkUnsupported` before its MSBuild is loaded. The suite runs under SDK 10 on CI (Linux, Windows, macOS); the same evaluation was also verified under SDK 9.0 and 10.0 with a pinned `global.json`. SDK 8.0 itself has not been exercised here (see #30). |
 | With a working directory, `QueryVisualStudioInstances` lists installed SDKs with the one `hostfxr` resolves for that directory (honoring `global.json`) first; it throws when `global.json` cannot be satisfied ([MSBuildLocator](https://github.com/microsoft/MSBuildLocator)). | We take the first instance, never "the newest". `UnsatisfiableGlobalJson_...` and `SelectionPinnedToADifferentSdk...` cover it. |
 | MSBuild can be registered once per process. | The registered SDK is remembered; a selection that needs a different SDK gets an `MsBuildSdkMismatch` blocker instead of silently using the wrong one. Failed lookups are not remembered. |
 | `ProjectLoadSettings`: `IgnoreMissingImports` also hides an unresolved `Sdk=` unless `FailOnUnresolvedSdk` is set; circular imports are only rejected with `RejectCircularImports` ([ProjectLoadSettings](https://learn.microsoft.com/dotnet/api/microsoft.build.evaluation.projectloadsettings)). | Both are set. Without them an unresolvable SDK produced misleading `MissingImport` blockers and a circular import was accepted as a complete evaluation (found by comparing against the docs). |
@@ -30,6 +30,15 @@ questions MSBuild behavior, add the verified answer here and pin it with a test.
   ignored (`ImportProjectExtensionProps=false`): a restored production project that merely references it must not become a test project.
 - `Project.GetItemProvenance` is documented as not yet implementing `Update`/`Remove`, but in practice returns them; the provenance tests
   pin that, so a regression in a newer MSBuild would be caught.
+
+## NuGet rules the inventory mirrors
+
+These come from NuGet's behavior, not MSBuild's, and are covered by tests in `InventoryProvenanceTests`:
+
+- With Central Package Management on, a non-global `PackageReference` must not set `Version` (NU1008); it is an error and no version is effective.
+  `GlobalPackageReference` versions are valid. A `GlobalPackageReference` also appears as a generated `PackageReference`; only the user-owned one is reported.
+- `VersionOverride` with `CentralPackageVersionOverrideEnabled=false` fails restore (NU1013); it is an error and does not fall back to the central version.
+- A `PackageVersion` is only used when `ManagePackageVersionsCentrally` is true; duplicate `PackageVersion` items are ambiguous (NU1506), not last-one-wins.
 
 ## Known limits
 

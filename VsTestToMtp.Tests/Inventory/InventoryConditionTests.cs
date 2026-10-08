@@ -128,6 +128,28 @@ public class InventoryConditionTests
         }
     }
 
+    [Test]
+    public async Task EnvironmentValue_SeenByAnEarlierCondition_IsFlagged_EvenIfALaterAssignmentOverridesIt()
+    {
+        // The final value of Flag comes from the project file, but when the condition runs it still comes from the environment.
+        const string variable = "VSTEST_TO_MTP_ENV_OVERRIDDEN";
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                $"  <PropertyGroup Condition=\"'$({variable})' != ''\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n"
+                + $"  <PropertyGroup>\n    <{variable}>from-file</{variable}>\n  </PropertyGroup>");
+
+        Environment.SetEnvironmentVariable(variable, "1");
+        try
+        {
+            await Assert.That(Blockers(workspace).Select(b => b.Code)).Contains(BlockerCodes.ConditionDependsOnEnvironment);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
     private static IReadOnlyList<InventoryBlocker> Blockers(ScenarioWorkspace workspace) =>
         workspace.Inventory("App/App.csproj").Projects.Single().Blockers;
 }

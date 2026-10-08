@@ -174,8 +174,9 @@ public class InventoryProvenanceTests
     }
 
     [Test]
-    public async Task VersionOverride_IsIgnored_WhenOverridesAreDisabled()
+    public async Task VersionOverride_WhenOverridesAreDisabled_IsAnError_AndNotFallenBackToTheCentralVersion()
     {
+        // NuGet fails restore (NU1013) instead of ignoring the override, so no version is effective.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .Write("Directory.Packages.props", """
                 <Project>
@@ -193,9 +194,49 @@ public class InventoryProvenanceTests
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
-        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.Central);
-        await Assert.That(nunit.Version).IsEqualTo("4.3.2");
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.IneffectiveVersionOverride]);
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(nunit.Version).IsNull();
+        InventoryBlocker blocker = project.Blockers.Single();
+        await Assert.That(blocker.Code).IsEqualTo(BlockerCodes.IneffectiveVersionOverride);
+        await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+    }
+
+    [Test]
+    public async Task InlineVersion_UnderCentralPackageManagement_IsAnError_AndNotAnEffectiveVersion()
+    {
+        // NU1008: a PackageReference must not carry Version when central management is on.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", "<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n  <ItemGroup>\n    <PackageVersion Include=\"MSTest\" Version=\"4.0.2\" />\n  </ItemGroup>\n</Project>")
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("MSTest|4.0.2"));
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState mstest = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(mstest.VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(mstest.Version).IsNull();
+        InventoryBlocker blocker = project.Blockers.Single();
+        await Assert.That(blocker.Code).IsEqualTo(BlockerCodes.InlineVersionUnderCentralManagement);
+        await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+        await Assert.That(blocker.Location!.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "Include=\"MSTest\""));
+
+        // The declaration is invalid for NuGet, but MSBuild's picture of the project is complete, so it is still classified.
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.TestApplication);
+    }
+
+    [Test]
+    public async Task GlobalPackageReferenceVersion_UnderCentralPackageManagement_IsValid()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", "<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n  <ItemGroup>\n    <GlobalPackageReference Include=\"Some.Analyzer\" Version=\"1.2.3\" />\n  </ItemGroup>\n</Project>")
+            .WriteProject("App/App.csproj");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState analyzer = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(analyzer.IsGlobal).IsTrue();
+        await Assert.That(analyzer.Version).IsEqualTo("1.2.3");
+        await Assert.That(analyzer.VersionSource).IsEqualTo(PackageVersionSource.Inline);
+        await Assert.That(project.Blockers).IsEmpty();
     }
 
     [Test]

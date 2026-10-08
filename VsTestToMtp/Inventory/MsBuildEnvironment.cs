@@ -10,6 +10,12 @@ namespace VsTestToMtp.Inventory;
 /// </summary>
 internal static class MsBuildEnvironment
 {
+    /// <summary>
+    /// The oldest .NET SDK whose MSBuild we support. The Microsoft.Build package we compile against (17.8.x) must not be
+    /// newer than the oldest MSBuild we load, per the MSBuildLocator guidance; 17.8 ships with SDK 8.0.100.
+    /// </summary>
+    public const int MinimumSdkMajorVersion = 8;
+
     private static readonly Lock Gate = new();
     private static string? s_registeredPath;
     private static bool s_registeredExternally;
@@ -57,6 +63,13 @@ internal static class MsBuildEnvironment
             {
                 (errorCode, error) = (BlockerCodes.MsBuildNotFound,
                     "No .NET SDK was found for the selected directory. Install the SDK that its global.json requires.");
+                return false;
+            }
+
+            if (instance.Version.Major < MinimumSdkMajorVersion)
+            {
+                (errorCode, error) = (BlockerCodes.MsBuildSdkUnsupported,
+                    $"This selection resolves to .NET SDK {instance.Version}, which is older than the oldest supported SDK ({MinimumSdkMajorVersion}.0); its MSBuild cannot be loaded safely.");
                 return false;
             }
 

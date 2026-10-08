@@ -198,9 +198,14 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         {
             foreach (ProjectItem item in project.GetItems(itemType))
             {
-                packages.Add(CapturePackage(project, item, itemType == "GlobalPackageReference", central, overrideAllowed, context, displayPath, blockers));
+                packages.Add(CapturePackage(project, item, itemType == "GlobalPackageReference", central, centralManagement, overrideAllowed, context, displayPath, blockers));
             }
         }
+
+        // NuGet turns each GlobalPackageReference into a generated PackageReference from its own targets; the user-owned declaration
+        // is the global one, so the generated twin (declared outside the repository) is not reported again.
+        packages = [.. packages.Where(p => p.IsGlobal || p.Definition.IsRepositoryFile
+            || !packages.Any(g => g.IsGlobal && string.Equals(g.Name, p.Name, StringComparison.OrdinalIgnoreCase)))];
 
         packages = [.. packages
             .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
@@ -264,6 +269,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         ProjectItem item,
         bool isGlobal,
         Dictionary<string, ProjectItem> central,
+        bool centralManagement,
         bool overrideAllowed,
         EvaluationContext context,
         string displayPath,
@@ -300,9 +306,29 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
 
         string inline = item.GetMetadataValue("Version");
         string versionOverride = item.GetMetadataValue("VersionOverride");
-        if (inline.Length > 0)
+        if (inline.Length > 0 && centralManagement && !isGlobal)
+        {
+            // NU1008: with Central Package Management a PackageReference must not carry Version (VersionOverride is the way to
+            // override one). Restore fails, so this is not an effective version.
+            (version, versionSource, versionDefinition) = (null, PackageVersionSource.None, null);
+            if (definition.IsRepositoryFile)
+            {
+                blockers.Add(new InventoryBlocker(
+                    BlockerCodes.InlineVersionUnderCentralManagement, BlockerSeverity.Error,
+                    $"PackageReference '{name}' sets Version, which NuGet rejects (NU1008) when Central Package Management is on.",
+                    "Move the version to a PackageVersion in Directory.Packages.props, or use VersionOverride to override the central version for this project.",
+                    displayPath, definition.Location));
+            }
+        }
+        else if (inline.Length > 0)
         {
             (version, versionSource, versionDefinition) = (inline, PackageVersionSource.Inline, MetadataProvenance(item, "Version", context, definition));
+        }
+        else if (versionOverride.Length > 0 && centralManagement && !overrideAllowed)
+        {
+            // NU1013: restore fails when VersionOverride is used while overrides are disabled; it does not fall back to the
+            // central version, so no version is effective.
+            (version, versionSource, versionDefinition) = (null, PackageVersionSource.None, null);
         }
         else if (versionOverride.Length > 0 && overrideAllowed)
         {
@@ -315,7 +341,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         else
         {
             (version, versionSource, versionDefinition) = (null, PackageVersionSource.None, null);
-            if (definition.IsRepositoryFile)
+            if (definition.IsRepositoryFile && versionOverride.Length == 0)
             {
                 blockers.Add(new InventoryBlocker(
                     BlockerCodes.UnresolvedPackageVersion, BlockerSeverity.Warning,
@@ -327,11 +353,26 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
 
         if (versionOverride.Length > 0 && !overrideAllowed && definition.IsRepositoryFile)
         {
+            // With central management on but overrides disabled NuGet fails restore (NU1013); with it off the metadata is
+            // simply not a version source, which leaves the reference unversioned.
+            bool restoreFails = centralManagement;
             blockers.Add(new InventoryBlocker(
-                BlockerCodes.IneffectiveVersionOverride, BlockerSeverity.Warning,
-                $"PackageReference '{name}' sets VersionOverride, which is ignored unless Central Package Management is on and CentralPackageVersionOverrideEnabled is not false.",
-                "Enable Central Package Management (and version overrides), or use Version instead of VersionOverride.",
+                BlockerCodes.IneffectiveVersionOverride, restoreFails ? BlockerSeverity.Error : BlockerSeverity.Warning,
+                restoreFails
+                    ? $"PackageReference '{name}' sets VersionOverride while CentralPackageVersionOverrideEnabled is false, which NuGet rejects (NU1013)."
+                    : $"PackageReference '{name}' sets VersionOverride, which has no effect unless Central Package Management is on.",
+                restoreFails
+                    ? "Remove VersionOverride, or enable version overrides (CentralPackageVersionOverrideEnabled)."
+                    : "Enable Central Package Management, or use Version instead of VersionOverride.",
                 displayPath, definition.Location));
+            if (!restoreFails)
+            {
+                blockers.Add(new InventoryBlocker(
+                    BlockerCodes.UnresolvedPackageVersion, BlockerSeverity.Warning,
+                    $"PackageReference '{name}' has no Version, VersionOverride or central PackageVersion.",
+                    "Add a Version, or a PackageVersion entry in the nearest Directory.Packages.props.",
+                    displayPath, definition.Location));
+            }
         }
 
         return new PackageReferenceState(name, version, versionSource, isGlobal, definition, modifiers, versionDefinition);

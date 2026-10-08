@@ -62,7 +62,13 @@ public static class InventoryBuilder
     {
         if (!MsBuildEnvironment.TryRegister(selectionDirectory, out string? errorCode, out string? error))
         {
-            InventoryBlocker blocker = errorCode == BlockerCodes.MsBuildSdkMismatch
+            InventoryBlocker blocker = errorCode == BlockerCodes.MsBuildSdkUnsupported
+                ? new(
+                    BlockerCodes.MsBuildSdkUnsupported, BlockerSeverity.Error,
+                    error!,
+                    "Use a global.json that selects .NET SDK 8.0 or newer (the repository can be migrated with a newer SDK even if it targets older frameworks), then rerun.",
+                    null, null)
+                : errorCode == BlockerCodes.MsBuildSdkMismatch
                 ? new(
                     BlockerCodes.MsBuildSdkMismatch, BlockerSeverity.Error,
                     error!,

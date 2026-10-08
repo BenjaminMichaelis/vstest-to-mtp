@@ -167,7 +167,8 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             // An environment-provided one still varies between machines, so that is reported either way.
             bool isUnsetProbe = IsUnsetProbe(condition, name);
             ProjectProperty? value = project.GetProperty(name);
-            if (!isUnsetProbe && (value is null || IsDefinedOnlyLater(value, evaluatedAt, order)))
+            PropertySourceAtEvaluation source = SourceAt(value, evaluatedAt, order);
+            if (!isUnsetProbe && source == PropertySourceAtEvaluation.Unset)
             {
                 string state = value is null ? "which is not set" : "which is only set later in evaluation";
                 blockers.Add(new InventoryBlocker(
@@ -176,7 +177,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                     $"Set '{name}' before this element (for example in Directory.Build.props) or pass it as a global property if the guarded state matters.",
                     displayPath, location));
             }
-            else if (value is { IsEnvironmentProperty: true })
+            else if (source == PropertySourceAtEvaluation.Environment)
             {
                 blockers.Add(new InventoryBlocker(
                     BlockerCodes.ConditionDependsOnEnvironment, BlockerSeverity.Warning,
@@ -198,31 +199,40 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     }
 
     /// <summary>
-    /// Whether every definition of <paramref name="value"/> comes after the element being evaluated. Global, reserved and
-    /// environment properties exist from the start, as does anything an earlier definition overrode.
+    /// Where the property's value comes from when the element at <paramref name="evaluatedAt"/> is evaluated, not where its
+    /// final value comes from: a later assignment can override an environment value, and a property defined only later is still
+    /// unset at that point. Items (<paramref name="evaluatedAt"/> is null) are evaluated after every property, so they see the
+    /// final value.
     /// </summary>
-    private static bool IsDefinedOnlyLater(ProjectProperty value, int? evaluatedAt, EvaluationOrder order)
+    private static PropertySourceAtEvaluation SourceAt(ProjectProperty? value, int? evaluatedAt, EvaluationOrder order)
     {
-        if (evaluatedAt is not { } at)
-        {
-            return false;
-        }
-
-        int? earliest = null;
         for (ProjectProperty? definition = value; definition is not null; definition = definition.Predecessor)
         {
-            if (definition.Xml is null || definition.IsGlobalProperty || definition.IsEnvironmentProperty || definition.IsReservedProperty)
+            if (definition.IsEnvironmentProperty)
             {
-                return false;
+                return PropertySourceAtEvaluation.Environment;
             }
 
-            if (order.IndexOf(definition.Xml) is { } index)
+            if (definition.Xml is null || definition.IsGlobalProperty || definition.IsReservedProperty)
             {
-                earliest = Math.Min(earliest ?? index, index);
+                return PropertySourceAtEvaluation.Other;
+            }
+
+            // A file definition counts when it is evaluated before the element (or when evaluation order does not apply).
+            if (evaluatedAt is not { } at || order.IndexOf(definition.Xml) is not { } index || index < at)
+            {
+                return PropertySourceAtEvaluation.Other;
             }
         }
 
-        return earliest is { } first && first >= at;
+        return PropertySourceAtEvaluation.Unset;
+    }
+
+    private enum PropertySourceAtEvaluation
+    {
+        Unset,
+        Environment,
+        Other,
     }
 
     private static bool IsRelevantElement(ProjectElement element) => element switch

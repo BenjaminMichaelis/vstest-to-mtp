@@ -79,6 +79,33 @@ public class InventoryEnvironmentTests
     }
 
     [Test]
+    public async Task SdkOlderThanTheSupportedFloor_IsRejected_WithoutLoadingItsMsBuild()
+    {
+        // 8.0 is the oldest SDK whose MSBuild we support (we compile against Microsoft.Build 17.8).
+        VisualStudioInstance[] sdks = [.. MSBuildLocator.QueryVisualStudioInstances(
+            new VisualStudioInstanceQueryOptions { DiscoveryTypes = DiscoveryType.DotNetSdk })];
+        VisualStudioInstance? tooOld = sdks.OrderBy(i => i.Version).FirstOrDefault(i => i.Version.Major < 8);
+        if (tooOld is null)
+        {
+            Skip.Test("Needs an installed .NET SDK older than 8.0.");
+            return;
+        }
+
+        using ScenarioWorkspace old = new ScenarioWorkspace()
+            .Write("global.json", $"{{ \"sdk\": {{ \"version\": \"{tooOld.Version}\", \"rollForward\": \"disable\" }} }}")
+            .WriteProject("App/App.csproj");
+        using ScenarioWorkspace current = new ScenarioWorkspace().WriteProject("App/App.csproj");
+
+        ProjectInventory rejected = old.Inventory("App/App.csproj").Projects.Single();
+        ProjectInventory ok = current.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(rejected.Classification).IsEqualTo(ProjectClassification.Unknown);
+        await Assert.That(rejected.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MsBuildSdkUnsupported]);
+        // Rejecting it must not have registered (and so poisoned) MSBuild for later selections.
+        await Assert.That(ok.Blockers).IsEmpty();
+    }
+
+    [Test]
     [SkipUnlessReadDenialSupported]
     public async Task UnreadableSelectedDirectory_IsReportedAsBlocker_InsteadOfThrowing()
     {
