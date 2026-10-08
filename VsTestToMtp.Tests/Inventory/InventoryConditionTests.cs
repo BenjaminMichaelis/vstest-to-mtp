@@ -150,6 +150,62 @@ public class InventoryConditionTests
         }
     }
 
+    [Test]
+    [Arguments("MSBuildProjectName")]
+    [Arguments("MSBuildProjectDirectory")]
+    [Arguments("MSBuildProjectFile")]
+    [Arguments("MSBuildProjectFullPath")]
+    [Arguments("MSBuildProjectExtensionsPath")]
+    [Arguments("MSBuildStartupDirectory")]
+    [Arguments("MSBuildToolsPath")]
+    [Arguments("MSBuildToolsVersion")]
+    [Arguments("MSBuildBinPath")]
+    [Arguments("MSBuildExtensionsPath")]
+    [Arguments("MSBuildSDKsPath")]
+    [Arguments("MSBuildRuntimeType")]
+    [Arguments("MSBuildThisFileDirectory")]
+    [Arguments("MSBuildThisFile")]
+    public async Task ReservedMsBuildProperty_IsNotFlagged(string property)
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                $"  <PropertyGroup Condition=\"'$({property})' != 'no-such-value'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+
+        await Assert.That(Blockers(workspace)).IsEmpty();
+    }
+
+    [Test]
+    public async Task CustomPropertyThatMerelyStartsWithMsBuild_IsAnalysedLikeAnyOther()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <PropertyGroup Condition=\"'$(MSBuildFeatureFlag)' == 'on'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+
+        await Assert.That(Blockers(workspace).Select(b => b.Code)).Contains(BlockerCodes.ConditionDependsOnUnsetProperty);
+    }
+
+    [Test]
+    public async Task EnvironmentPropertyThatMerelyStartsWithMsBuild_IsFlagged()
+    {
+        const string variable = "MSBuildEnableWorkloadResolverForTest";
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                $"  <PropertyGroup Condition=\"'$({variable})' == 'true'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+
+        Environment.SetEnvironmentVariable(variable, "true");
+        try
+        {
+            await Assert.That(Blockers(workspace).Select(b => b.Code)).Contains(BlockerCodes.ConditionDependsOnEnvironment);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
     private static IReadOnlyList<InventoryBlocker> Blockers(ScenarioWorkspace workspace) =>
         workspace.Inventory("App/App.csproj").Projects.Single().Blockers;
 }

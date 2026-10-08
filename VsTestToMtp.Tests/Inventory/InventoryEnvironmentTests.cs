@@ -46,13 +46,23 @@ public class InventoryEnvironmentTests
         using ScenarioWorkspace newest = new ScenarioWorkspace().Write("global.json", Pin(sdks[0].Version)).WriteProject("App/App.csproj");
         using ScenarioWorkspace older = new ScenarioWorkspace().Write("global.json", Pin(sdks[1].Version)).WriteProject("App/App.csproj");
 
-        ProjectInventory first = newest.Inventory("App/App.csproj").Projects.Single();
-        ProjectInventory second = older.Inventory("App/App.csproj").Projects.Single();
+        ProjectInventory[] results =
+        [
+            newest.Inventory("App/App.csproj").Projects.Single(),
+            older.Inventory("App/App.csproj").Projects.Single(),
+        ];
 
-        await Assert.That(first.Blockers).IsEmpty();
-        await Assert.That(second.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(second.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MsBuildSdkMismatch]);
-        await Assert.That(second.Blockers.Single().Remediation).Contains("separate processes");
+        // Which SDK is registered depends on what ran earlier in this process (the fixtures' pin, or one of these two), so do
+        // not assume it. Whatever it is, at most one of two selections pinned to different SDKs can have been evaluated, and
+        // the other must be refused rather than evaluated with the wrong SDK.
+        ProjectInventory[] refused = [.. results.Where(r => r.Blockers.Count > 0)];
+        await Assert.That(refused).IsNotEmpty();
+        foreach (ProjectInventory project in refused)
+        {
+            await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+            await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MsBuildSdkMismatch]);
+            await Assert.That(project.Blockers.Single().Remediation).Contains("separate processes");
+        }
     }
 
     [Test]

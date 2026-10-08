@@ -59,12 +59,13 @@ internal static class SolutionReader
 
     private static Selection ResolveListedDirectory(string directory, PathFormatter formatter)
     {
-        string[] solutions =
-        [
-            .. Directory.EnumerateFiles(directory, "*.sln"),
-            .. Directory.EnumerateFiles(directory, "*.slnx"),
-        ];
-        solutions = [.. solutions.Order(StringComparer.OrdinalIgnoreCase)];
+        // One enumeration filtered with OrdinalIgnoreCase: wildcard patterns are case-sensitive on case-sensitive file systems,
+        // which would miss App.SLN even though passing that file directly is accepted. The ordinal tiebreak keeps the order
+        // (and so the ambiguity message) deterministic when names differ only by case.
+        string[] files = [.. Directory.EnumerateFiles(directory)
+            .OrderBy(f => System.IO.Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(f => System.IO.Path.GetFileName(f), StringComparer.Ordinal)];
+        string[] solutions = [.. files.Where(f => HasExtension(f, ".sln") || HasExtension(f, ".slnx"))];
         if (solutions.Length == 1)
         {
             return ReadSolution(solutions[0], formatter);
@@ -77,13 +78,16 @@ internal static class SolutionReader
                 "Pass the solution file you want to inventory.", formatter);
         }
 
-        string[] projects = [.. Directory.EnumerateFiles(directory, "*.csproj").Order(StringComparer.OrdinalIgnoreCase)];
+        string[] projects = [.. files.Where(f => HasExtension(f, ".csproj"))];
         return projects.Length == 1
             ? new Selection("project", projects[0], [projects[0]], [])
             : Failed("directory", directory, BlockerCodes.AmbiguousSelection,
                 $"'{formatter.Format(directory)}' contains no single solution or project.",
                 "Pass a .csproj, .sln or .slnx file.", formatter);
     }
+
+    private static bool HasExtension(string file, string extension) =>
+        string.Equals(System.IO.Path.GetExtension(file), extension, StringComparison.OrdinalIgnoreCase);
 
     private static Selection ReadSolution(string solutionPath, PathFormatter formatter)
     {

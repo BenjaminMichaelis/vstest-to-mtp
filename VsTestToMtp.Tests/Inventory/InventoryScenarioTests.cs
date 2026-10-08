@@ -97,6 +97,62 @@ public class InventoryScenarioTests
     }
 
     [Test]
+    public async Task DirectorySelection_FindsASolutionWhoseExtensionIsUpperCase()
+    {
+        // The same file is accepted when passed directly, so selecting its directory must find it on every file system.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj")
+            .WriteSlnx("Only.SLNX", "App/App.csproj");
+
+        InventoryResult result = InventoryBuilder.Build(workspace.RootPath, new InventoryOptions(workspace.RootPath));
+
+        await Assert.That(result.Selection.Kind).IsEqualTo("slnx");
+        await Assert.That(result.Projects.Select(p => p.Path)).IsEquivalentTo(["App/App.csproj"]);
+        await Assert.That(result.Blockers).IsEmpty();
+    }
+
+    [Test]
+    public async Task DirectorySelection_FindsASingleProjectWhoseExtensionIsUpperCase()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App.CSPROJ");
+
+        InventoryResult result = InventoryBuilder.Build(workspace.RootPath, new InventoryOptions(workspace.RootPath));
+
+        await Assert.That(result.Selection.Kind).IsEqualTo("project");
+        await Assert.That(result.Projects.Select(p => p.Path)).IsEquivalentTo(["App.CSPROJ"]);
+        await Assert.That(result.Blockers).IsEmpty();
+    }
+
+    [Test]
+    public async Task DirectorySelection_AmbiguityMessageListsSolutionsInADeterministicOrder()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App.csproj")
+            .WriteSlnx("b.slnx", "App.csproj")
+            .WriteSlnx("A.SLN", "App.csproj");
+
+        InventoryResult result = InventoryBuilder.Build(workspace.RootPath, new InventoryOptions(workspace.RootPath));
+
+        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCodes.AmbiguousSelection).Message).Contains("A.SLN, b.slnx");
+    }
+
+    [Test]
+    [SkipOnCaseInsensitivePaths]
+    public async Task DirectorySelection_OrdersSolutionsDifferingOnlyByCase_Deterministically()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App.csproj")
+            .WriteSlnx("b.slnx", "App.csproj")
+            .WriteSlnx("B.SLNX", "App.csproj");
+
+        InventoryResult result = InventoryBuilder.Build(workspace.RootPath, new InventoryOptions(workspace.RootPath));
+
+        // Case-insensitive order ties, then ordinal decides: uppercase sorts before lowercase.
+        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCodes.AmbiguousSelection).Message).Contains("B.SLNX, b.slnx");
+    }
+
+    [Test]
     public async Task Selection_OfMissingFile_IsReportedAsBlocker()
     {
         using ScenarioWorkspace workspace = new();

@@ -1,6 +1,7 @@
 namespace VsTestToMtp.Tests.Inventory;
 
 using VsTestToMtp.Inventory;
+using VsTestToMtp.Tests.Fixtures;
 
 /// <summary>
 /// A small disposable repository written to a temp directory (outside this repository, so none of its
@@ -12,6 +13,11 @@ public sealed class ScenarioWorkspace : IDisposable
     {
         RootPath = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-scenarios", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(RootPath);
+
+        // MSBuild is registered once per process, so every workspace must resolve to the SDK the fixtures pin; without
+        // this, unpinned workspaces resolve the newest installed SDK and tests would depend on which one ran first.
+        // Tests that exercise global.json handling overwrite this file.
+        Write("global.json", File.ReadAllText(Path.Combine(FixtureCatalog.FixturesRoot, "mstest", "plain", "global.json")));
     }
 
     public string RootPath { get; }

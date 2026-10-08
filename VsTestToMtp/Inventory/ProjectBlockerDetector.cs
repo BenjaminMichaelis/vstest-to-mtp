@@ -11,8 +11,15 @@ namespace VsTestToMtp.Inventory;
 /// </summary>
 internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
 {
-    // Environment-provided properties that are present on every machine and not worth flagging.
-    private static readonly HashSet<string> WellKnownEnvironmentProperties = new(StringComparer.OrdinalIgnoreCase) { "OS" };
+    // Environment-provided properties that are present on every machine and not worth flagging. MSBuildExtensionsPath and
+    // MSBuildSDKsPath are environment variables that MSBuildLocator sets when it registers the SDK, so they hold the same
+    // meaning for everyone using that SDK.
+    private static readonly HashSet<string> WellKnownEnvironmentProperties = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "OS",
+        "MSBuildExtensionsPath",
+        "MSBuildSDKsPath",
+    };
 
     // MSBuild item types are case-insensitive.
     private static readonly HashSet<string> RelevantItemTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -154,10 +161,11 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
         // such as Condition="$(CI)", negation, and/or, Exists(...)). Property functions are not simple references.
         foreach (string name in PropertyReferences().Matches(condition).Select(m => m.Groups["n"].Value).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            // MSBuild's reserved properties (MSBuildThisFileDirectory, MSBuildProjectName, ...) always exist, but per-file
-            // ones are resolved while evaluating and are not in the project's property table.
+            // MSBuild's reserved properties are in the property table and recognised by SourceAt. The exception is the per-file
+            // MSBuildThisFile* family, which MSBuild resolves while evaluating each file and never stores. A custom property that
+            // merely starts with "MSBuild" (MSBuildEnableWorkloadResolver, ...) is an ordinary property and is analysed as one.
             if (string.Equals(name, "IsTestProject", StringComparison.OrdinalIgnoreCase)
-                || name.StartsWith("MSBuild", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("MSBuildThisFile", StringComparison.OrdinalIgnoreCase)
                 || WellKnownEnvironmentProperties.Contains(name))
             {
                 continue;
