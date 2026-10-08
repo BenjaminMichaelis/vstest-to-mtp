@@ -2,7 +2,7 @@
 
 A .NET global tool that migrates .NET test projects from [VSTest](https://github.com/microsoft/vstest) to [Microsoft.Testing.Platform (MTP)](https://learn.microsoft.com/dotnet/core/testing/microsoft-testing-platform-intro) for use with `dotnet test`.
 
-> **Status:** This is an early scaffold. The CLI entry point, packaging and CI are set up, but no migration behavior has been implemented yet.
+> **Status:** This is an early scaffold. The CLI entry point, packaging and CI are set up. The read-only project inventory (see below) exists as a library, but no migration behavior has been implemented yet.
 
 ## Install
 
@@ -28,10 +28,17 @@ dotnet test --no-build
 dotnet run --project VsTestToMtp -- --help
 ```
 
+### Project inventory
+
+`VsTestToMtp.Inventory.InventoryBuilder.Build(path)` inventories a `.csproj`, `.sln` or `.slnx` without modifying the repository: exact solution membership, MSBuild-evaluated properties, package references and project references per target framework (with file/line, condition and import-chain provenance), the imported `Directory.Build.props/targets` and `Directory.Packages.props`, the effective `global.json`, and CI/script files (generated and hidden directories are skipped). Projects are classified as test applications from evaluated `IsTestProject` and package evidence declared in the project itself, never from file names. Anything that cannot be determined (missing imports, evaluation failures, environment-dependent conditions, `IsTestProject` conditions in `Directory.Build.props`, ...) is reported as an actionable blocker instead of a guess.
+
+Evaluation uses the .NET SDK's MSBuild (located with `Microsoft.Build.Locator`, honoring `global.json`), so an installed SDK is required at runtime. Nothing in the repository is restored, built or written, and `obj/*.nuget.g.*` files are ignored so results do not depend on restore state. As with any MSBuild evaluation, an SDK referenced with a version (for example `MSTest.Sdk/3.6.4`) that is not in the NuGet cache yet is downloaded there, as `dotnet restore` would; set `MSBUILDDISABLENUGETSDKRESOLVER=1` to prevent that (such projects are then reported as blockers). This is also what keeps classification correct: `Microsoft.NET.Test.Sdk` sets `IsTestProject=true` for every project that references it once restored, so a production project that merely references it must not be treated as a test application on that basis.
+
+See [`docs/inventory-msbuild-usage.md`](docs/inventory-msbuild-usage.md) for the documented MSBuild API constraints, how the inventory complies, and what was verified against a real MSBuild.
+
 ### VSTest migration fixtures
 
 [`fixtures/`](fixtures/README.md) contains checked-in MSTest, NUnit, xUnit v3 and xUnit v2 sample projects (each in plain and Central Package Management variants) generated from the official templates and running under VSTest. Converter tests work on isolated copies of them. CI builds and tests every fixture in place.
-
 ### Packing and installing locally
 
 The tool uses [RID-specific packaging](https://learn.microsoft.com/dotnet/core/tools/rid-specific-tools). A single `dotnet pack` produces self-contained packages for `win-x64`, `linux-x64` and `osx-arm64`, a portable `any` CoreCLR fallback, and a top-level pointer package:
