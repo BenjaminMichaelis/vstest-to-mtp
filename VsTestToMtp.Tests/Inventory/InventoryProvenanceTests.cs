@@ -202,6 +202,62 @@ public class InventoryProvenanceTests
     }
 
     [Test]
+    [Arguments("true", true)]
+    [Arguments("yes", true)]
+    [Arguments("!false", true)]
+    [Arguments(" true ", false)]
+    [Arguments("false", false)]
+    public async Task CentralPackageManagement_IsOn_ExactlyWhenNuGetConsidersItOn(string value, bool expectedOn)
+    {
+        // NuGet.targets compares the property with == 'true' (an MSBuild boolean comparison, so yes/!false count but a padded
+        // value does not), and restore then reads the result literally.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", $"<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>{value}</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n  <ItemGroup>\n    <PackageVersion Include=\"NUnit\" Version=\"4.3.2\" />\n  </ItemGroup>\n</Project>")
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("NUnit"));
+
+        PackageReferenceState nunit = workspace.Inventory("App/App.csproj").Projects.Single().TargetFrameworks.Single().Packages.Single();
+
+        await Assert.That(nunit.VersionSource).IsEqualTo(expectedOn ? PackageVersionSource.Central : PackageVersionSource.None);
+        await Assert.That(nunit.Version).IsEqualTo(expectedOn ? "4.3.2" : null);
+    }
+
+    [Test]
+    public async Task CentralPackageManagement_WithoutAnImportedDirectoryPackagesProps_IsOff()
+    {
+        // NuGet only enables central management when Directory.Packages.props was imported; a PackageVersion declared elsewhere is ignored.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n"
+                + "  <ItemGroup>\n    <PackageVersion Include=\"NUnit\" Version=\"4.3.2\" />\n  </ItemGroup>\n"
+                + ScenarioWorkspace.PackageReferences("NUnit"));
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.UnresolvedPackageVersion]);
+    }
+
+    [Test]
+    [Arguments("off")]
+    [Arguments("no")]
+    public async Task VersionOverride_IsAllowed_UnlessOverridesAreDisabledWithTheLiteralFalse(string value)
+    {
+        // NuGet disables overrides only for the literal (trimmed) "false"; other MSBuild false spellings leave them enabled.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", $"<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n    <CentralPackageVersionOverrideEnabled>{value}</CentralPackageVersionOverrideEnabled>\n  </PropertyGroup>\n  <ItemGroup>\n    <PackageVersion Include=\"NUnit\" Version=\"4.3.2\" />\n  </ItemGroup>\n</Project>")
+            .WriteProject("App/App.csproj", "  <ItemGroup>\n    <PackageReference Include=\"NUnit\" VersionOverride=\"4.0.0\" />\n  </ItemGroup>");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.VersionOverride);
+        await Assert.That(nunit.Version).IsEqualTo("4.0.0");
+        await Assert.That(project.Blockers).IsEmpty();
+    }
+
+    [Test]
     public async Task InlineVersion_UnderCentralPackageManagement_IsAnError_AndNotAnEffectiveVersion()
     {
         // NU1008: a PackageReference must not carry Version when central management is on.

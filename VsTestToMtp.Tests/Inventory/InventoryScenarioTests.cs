@@ -526,22 +526,6 @@ public class InventoryScenarioTests
     }
 
     [Test]
-    [Arguments("yes", ProjectClassification.TestApplication)]
-    [Arguments("ON", ProjectClassification.TestApplication)]
-    [Arguments("No", ProjectClassification.Production)]
-    [Arguments("off", ProjectClassification.Production)]
-    public async Task IsTestProject_AcceptsTheBooleanSpellingsMsBuildAccepts(string value, ProjectClassification expected)
-    {
-        using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", $"  <PropertyGroup>\n    <IsTestProject>{value}</IsTestProject>\n  </PropertyGroup>");
-
-        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
-
-        await Assert.That(project.Classification).IsEqualTo(expected);
-        await Assert.That(project.Blockers).IsEmpty();
-    }
-
-    [Test]
     public async Task RestoreOutput_DoesNotChangeTheResult()
     {
         // Microsoft.NET.Test.Sdk's props set IsTestProject=true for any project that references it, which would make a

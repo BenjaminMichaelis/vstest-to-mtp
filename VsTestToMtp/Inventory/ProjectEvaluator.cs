@@ -168,10 +168,12 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         }
 
         // A PackageVersion only supplies versions when Central Package Management is on; NuGet ignores it otherwise.
-        // VersionOverride additionally needs overrides enabled, which is the default.
-        bool centralManagement = MsBuildBoolean.TryParse(project.GetPropertyValue("ManagePackageVersionsCentrally"), out bool cpm) && cpm;
-        bool overrideAllowed = centralManagement
-            && !(MsBuildBoolean.TryParse(project.GetPropertyValue("CentralPackageVersionOverrideEnabled"), out bool enabled) && !enabled);
+        // Matches NuGet's restore outside Visual Studio: it reads _CentralPackageVersionsEnabled, which NuGet.targets sets only when
+        // ManagePackageVersionsCentrally == 'true' and a Directory.Packages.props was imported, and disables overrides only for a
+        // literal "false" (overrides are on by default).
+        // https://github.com/NuGet/NuGet.Client/blob/b337f5b80d3363a61f773f2e1c3757526a474610/src/NuGet.Core/NuGet.Commands/RestoreCommand/Utility/PackageSpecFactory.cs#L513-L517
+        bool centralManagement = NuGetBoolean.IsTrue(project.GetPropertyValue("_CentralPackageVersionsEnabled"));
+        bool overrideAllowed = centralManagement && !NuGetBoolean.IsFalse(project.GetPropertyValue("CentralPackageVersionOverrideEnabled"));
         Dictionary<string, ProjectItem> central = new(StringComparer.OrdinalIgnoreCase);
         if (centralManagement)
         {
