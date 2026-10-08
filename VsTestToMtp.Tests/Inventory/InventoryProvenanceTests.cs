@@ -134,6 +134,31 @@ public class InventoryProvenanceTests
     }
 
     [Test]
+    public async Task DuplicatePackageVersion_IsAmbiguous_NotResolvedByOverwriting()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.0.0" />
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("NUnit"));
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        InventoryBlocker duplicate = project.Blockers.Single(b => b.Code == BlockerCodes.DuplicatePackageVersion);
+        await Assert.That(duplicate.Message).Contains("4.0.0").Or.Contains("Directory.Packages.props");
+        await Assert.That(project.TargetFrameworks.Single().Packages.Single().VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(project.Blockers.Select(b => b.Code)).Contains(BlockerCodes.UnresolvedPackageVersion);
+    }
+
+    [Test]
     public async Task VersionOverride_IsIgnored_WhenCentralPackageManagementIsOff()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()

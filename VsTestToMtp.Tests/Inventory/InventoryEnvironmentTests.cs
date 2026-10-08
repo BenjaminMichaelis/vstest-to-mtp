@@ -98,6 +98,24 @@ public class InventoryEnvironmentTests
 
     [Test]
     [SkipUnlessReadDenialSupported]
+    public async Task UnreadableProjectFile_IsReportedAsBlocker_InsteadOfThrowing()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj");
+
+        using (Lock(workspace.PathOf("App/App.csproj")))
+        {
+            ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+            await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+            InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.EvaluationFailed);
+            await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+            await Assert.That(blocker.Location!.File).IsEqualTo("App/App.csproj");
+        }
+    }
+
+    [Test]
+    [SkipUnlessReadDenialSupported]
     public async Task UnreadableGlobalJson_IsReportedAsBlocker_InsteadOfThrowing()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()

@@ -150,48 +150,51 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
         string displayPath,
         List<InventoryBlocker> blockers)
     {
-        foreach (Match match in LiteralComparison().Matches(condition))
+        // Every simple property reference counts, whatever the surrounding syntax (either quote style, a bare boolean
+        // such as Condition="$(CI)", negation, and/or, Exists(...)). Property functions are not simple references.
+        foreach (string name in PropertyReferences().Matches(condition).Select(m => m.Groups["n"].Value).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            string left = match.Groups["l"].Value;
-            string right = match.Groups["r"].Value;
-            foreach ((string side, string other) in new[] { (left, right), (right, left) })
+            // MSBuild's reserved properties (MSBuildThisFileDirectory, MSBuildProjectName, ...) always exist, but per-file
+            // ones are resolved while evaluating and are not in the project's property table.
+            if (string.Equals(name, "IsTestProject", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("MSBuild", StringComparison.OrdinalIgnoreCase)
+                || WellKnownEnvironmentProperties.Contains(name))
             {
-                Match property = PropertyReference().Match(side);
-                if (!property.Success)
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                string name = property.Groups["n"].Value;
-                if (string.Equals(name, "IsTestProject", StringComparison.OrdinalIgnoreCase)
-                    || WellKnownEnvironmentProperties.Contains(name))
-                {
-                    continue;
-                }
-
-                // Comparing with '' is a deliberate "is it unset?" probe, so an absent (or later-defined) property is intended.
-                // An environment-provided one still varies between machines, so that is reported either way.
-                bool isUnsetProbe = other.Length == 0;
-                ProjectProperty? value = project.GetProperty(name);
-                if (!isUnsetProbe && (value is null || IsDefinedOnlyLater(value, evaluatedAt, order)))
-                {
-                    string state = value is null ? "which is not set" : "which is only set later in evaluation";
-                    blockers.Add(new InventoryBlocker(
-                        BlockerCodes.ConditionDependsOnUnsetProperty, BlockerSeverity.Warning,
-                        $"Condition '{condition}' at {location} depends on '{name}', {state}, so the guarded element is treated as absent/false.",
-                        $"Set '{name}' before this element (for example in Directory.Build.props) or pass it as a global property if the guarded state matters.",
-                        displayPath, location));
-                }
-                else if (value is { IsEnvironmentProperty: true })
-                {
-                    blockers.Add(new InventoryBlocker(
-                        BlockerCodes.ConditionDependsOnEnvironment, BlockerSeverity.Warning,
-                        $"Condition '{condition}' at {location} depends on the environment variable '{name}', so the result can differ between machines and CI.",
-                        $"Define '{name}' explicitly in MSBuild if the guarded state matters.",
-                        displayPath, location));
-                }
+            // Comparing with '' is a deliberate "is it unset?" probe, so an absent (or later-defined) property is intended.
+            // An environment-provided one still varies between machines, so that is reported either way.
+            bool isUnsetProbe = IsUnsetProbe(condition, name);
+            ProjectProperty? value = project.GetProperty(name);
+            if (!isUnsetProbe && (value is null || IsDefinedOnlyLater(value, evaluatedAt, order)))
+            {
+                string state = value is null ? "which is not set" : "which is only set later in evaluation";
+                blockers.Add(new InventoryBlocker(
+                    BlockerCodes.ConditionDependsOnUnsetProperty, BlockerSeverity.Warning,
+                    $"Condition '{condition}' at {location} depends on '{name}', {state}, so the guarded element is treated as absent/false.",
+                    $"Set '{name}' before this element (for example in Directory.Build.props) or pass it as a global property if the guarded state matters.",
+                    displayPath, location));
+            }
+            else if (value is { IsEnvironmentProperty: true })
+            {
+                blockers.Add(new InventoryBlocker(
+                    BlockerCodes.ConditionDependsOnEnvironment, BlockerSeverity.Warning,
+                    $"Condition '{condition}' at {location} depends on the environment variable '{name}', so the result can differ between machines and CI.",
+                    $"Define '{name}' explicitly in MSBuild if the guarded state matters.",
+                    displayPath, location));
             }
         }
+    }
+
+    // '$(Name)' == '' / != '' in either order and with either quote style.
+    private static bool IsUnsetProbe(string condition, string name)
+    {
+        string reference = @"\$\(\s*" + Regex.Escape(name) + @"\s*\)";
+        return Regex.IsMatch(
+            condition,
+            $@"(['""]){reference}\1\s*[!=]=\s*(['""])\2|(['""])\3\s*[!=]=\s*(['""]){reference}\4",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     /// <summary>
@@ -233,9 +236,6 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     [GeneratedRegex(@"\$\(\s*IsTestProject\s*\)", RegexOptions.IgnoreCase)]
     private static partial Regex IsTestProjectReference();
 
-    [GeneratedRegex(@"'(?<l>[^']*)'\s*(?:==|!=)\s*'(?<r>[^']*)'")]
-    private static partial Regex LiteralComparison();
-
-    [GeneratedRegex(@"^\$\((?<n>[A-Za-z_][A-Za-z0-9_]*)\)$")]
-    private static partial Regex PropertyReference();
+    [GeneratedRegex(@"\$\(\s*(?<n>[A-Za-z_][A-Za-z0-9_]*)\s*\)")]
+    private static partial Regex PropertyReferences();
 }

@@ -129,6 +129,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         }
         catch (InvalidProjectFileException ex)
         {
+            // MSBuild reports unreadable, locked and missing project files this way too, not as IOException.
             string file = string.IsNullOrEmpty(ex.ProjectFile) ? projectPath : ex.ProjectFile;
             blockers.Add(new InventoryBlocker(
                 BlockerCodes.EvaluationFailed, BlockerSeverity.Error,
@@ -161,9 +162,21 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         Dictionary<string, ProjectItem> central = new(StringComparer.OrdinalIgnoreCase);
         if (centralManagement)
         {
-            foreach (ProjectItem version in project.GetItems("PackageVersion"))
+            foreach (IGrouping<string, ProjectItem> group in project.GetItems("PackageVersion").GroupBy(v => v.EvaluatedInclude, StringComparer.OrdinalIgnoreCase))
             {
-                central[version.EvaluatedInclude] = version;
+                if (group.Count() == 1)
+                {
+                    central[group.Key] = group.Single();
+                    continue;
+                }
+
+                // NuGet reports NU1506 here because restore is inconsistent; do not pick a winner.
+                Provenance[] definitions = [.. group.Select(v => context.Provenance(v.Xml))];
+                blockers.Add(new InventoryBlocker(
+                    BlockerCodes.DuplicatePackageVersion, BlockerSeverity.Warning,
+                    $"PackageVersion '{group.Key}' is declared {definitions.Length} times ({string.Join(", ", definitions.Select(d => d.Location))}), so its central version is ambiguous.",
+                    "Keep one PackageVersion per package (use Update to change a version declared elsewhere).",
+                    displayPath, definitions[^1].Location));
             }
         }
 

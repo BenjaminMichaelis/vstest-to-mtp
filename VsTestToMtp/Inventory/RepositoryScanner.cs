@@ -88,13 +88,13 @@ internal static partial class RepositoryScanner
     public static IReadOnlyList<AutomationFile> FindAutomation(PathFormatter formatter, List<InventoryBlocker> blockers)
     {
         List<AutomationFile> files = [];
-        Walk(formatter.Root, insideHiddenCiDirectory: false, files, formatter, blockers);
+        Walk(formatter.Root, files, formatter, blockers);
         return [.. files.OrderBy(f => f.Path, StringComparer.Ordinal)];
     }
 
-    private static void Walk(string directory, bool insideHiddenCiDirectory, List<AutomationFile> files, PathFormatter formatter, List<InventoryBlocker> blockers)
+    private static void Walk(string directory, List<AutomationFile> files, PathFormatter formatter, List<InventoryBlocker> blockers)
     {
-        List<(string Path, bool IsCi)> descend = [];
+        List<string> descend = [];
         try
         {
             foreach (string file in Directory.EnumerateFiles(directory))
@@ -114,12 +114,12 @@ internal static partial class RepositoryScanner
 
                 if (ExcludedDirectories.Contains(name)
                     || info.Attributes.HasFlag(FileAttributes.ReparsePoint)
-                    || (isHidden && !isCi && !insideHiddenCiDirectory))
+                    || (isHidden && !isCi))
                 {
                     continue;
                 }
 
-                descend.Add((child, isCi));
+                descend.Add(child);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -131,9 +131,9 @@ internal static partial class RepositoryScanner
                 null, formatter.Location(directory)));
         }
 
-        foreach ((string path, bool isCi) in descend)
+        foreach (string path in descend)
         {
-            Walk(path, insideHiddenCiDirectory || isCi, files, formatter, blockers);
+            Walk(path, files, formatter, blockers);
         }
     }
 
@@ -162,19 +162,20 @@ internal static partial class RepositoryScanner
         };
     }
 
-    private static bool MentionsDotNetTest(string file)
+    // null when the file could not be inspected (too large, unreadable, removed), so it is never reported as "does not mention it".
+    private static bool? MentionsDotNetTest(string file)
     {
         try
         {
-            return new FileInfo(file).Length <= MaxScannedFileBytes && DotNetTest().IsMatch(File.ReadAllText(file));
+            return new FileInfo(file).Length <= MaxScannedFileBytes ? DotNetTest().IsMatch(File.ReadAllText(file)) : null;
         }
         catch (IOException)
         {
-            return false;
+            return null;
         }
         catch (UnauthorizedAccessException)
         {
-            return false;
+            return null;
         }
     }
 

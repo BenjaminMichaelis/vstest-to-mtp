@@ -370,6 +370,20 @@ public class InventoryScenarioTests
     }
 
     [Test]
+    public async Task ImportedTwice_IsNotAnEvaluationFailure()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("App/shared.props", "<Project>\n  <PropertyGroup>\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n</Project>")
+            .WriteProject("App/App.csproj", "  <Import Project=\"shared.props\" />\n  <Import Project=\"shared.props\" />");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Production);
+        await Assert.That(project.Blockers.Select(b => b.Code)).DoesNotContain(BlockerCodes.EvaluationFailed);
+        await Assert.That(project.TargetFrameworks.Single().GetProperty("IsPackable")!.Value).IsEqualTo("false");
+    }
+
+    [Test]
     public async Task GuardedImportThatResolvesToAnEmptyPath_IsNotABlocker()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
@@ -620,6 +634,8 @@ public class InventoryScenarioTests
             .Write(".circleci/config.yml", "jobs:\n  test:\n    steps:\n      - run: dotnet test\n")
             .Write(".gitlab-ci.yml", "test:\n  script: dotnet build\n")
             .Write(".github/workflows/ci.yml", "steps:\n  - run: dotnet test\n")
+            .Write(".github/.cache/run.sh", "dotnet test")
+            .Write("scripts/huge.sh", new string('#', (2 * 1024 * 1024) + 1))
             .Write(".github/workflows/lint.yaml", "steps:\n  - run: echo lint\n")
             .Write("azure-pipelines.yml", "steps:\n- script: dotnet  test\n")
             .Write("scripts/build.ps1", "dotnet build\n")
@@ -634,7 +650,7 @@ public class InventoryScenarioTests
 
         IReadOnlyList<AutomationFile> automation = workspace.Inventory("App/App.csproj").Automation;
 
-        await Assert.That(automation.Select(a => (a.Path, a.Kind, a.MentionsDotNetTest))).IsEquivalentTo(
+        (string, AutomationKind, bool?)[] expected =
             [
                 (".circleci/config.yml", AutomationKind.CircleCi, true),
                 (".github/workflows/ci.yml", AutomationKind.GitHubWorkflow, true),
@@ -643,9 +659,11 @@ public class InventoryScenarioTests
                 ("Makefile", AutomationKind.Makefile, true),
                 ("azure-pipelines.yml", AutomationKind.AzurePipelines, true),
                 ("scripts/build.ps1", AutomationKind.PowerShellScript, false),
+                ("scripts/huge.sh", AutomationKind.ShellScript, null),
                 ("scripts/run.sh", AutomationKind.ShellScript, true),
-            ],
-            CollectionOrdering.Matching);
+            ];
+
+        await Assert.That(automation.Select(a => (a.Path, a.Kind, a.MentionsDotNetTest))).IsEquivalentTo(expected, CollectionOrdering.Matching);
     }
 
     [Test]

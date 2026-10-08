@@ -108,6 +108,26 @@ public class InventoryConditionTests
         }
     }
 
+    [Test]
+    public async Task BareBooleanCondition_OnAnEnvironmentProperty_IsFlagged()
+    {
+        const string variable = "VSTEST_TO_MTP_ENV_BOOL";
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                $"  <PropertyGroup Condition=\"$({variable})\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+
+        Environment.SetEnvironmentVariable(variable, "true");
+        try
+        {
+            await Assert.That(Blockers(workspace).Select(b => b.Code)).Contains(BlockerCodes.ConditionDependsOnEnvironment);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
     private static IReadOnlyList<InventoryBlocker> Blockers(ScenarioWorkspace workspace) =>
         workspace.Inventory("App/App.csproj").Projects.Single().Blockers;
 }
