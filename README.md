@@ -34,6 +34,8 @@ dotnet run --project VsTestToMtp -- --help
 
 Evaluation uses the .NET SDK's MSBuild (located with `Microsoft.Build.Locator`, honoring `global.json`), so an installed SDK is required at runtime. Nothing is restored or built, and `obj/*.nuget.g.*` files are ignored so results do not depend on restore state. This is also what keeps classification correct: `Microsoft.NET.Test.Sdk` sets `IsTestProject=true` for every project that references it once restored, so a production project that merely references it must not be treated as a test application on that basis.
 
+See [`docs/inventory-msbuild-usage.md`](docs/inventory-msbuild-usage.md) for the documented MSBuild API constraints, how the inventory complies, and what was verified against a real MSBuild.
+
 ### VSTest migration fixtures
 
 [`fixtures/`](fixtures/README.md) contains checked-in MSTest, NUnit, xUnit v3 and xUnit v2 sample projects (each in plain and Central Package Management variants) generated from the official templates and running under VSTest. Converter tests work on isolated copies of them. CI builds and tests every fixture in place.

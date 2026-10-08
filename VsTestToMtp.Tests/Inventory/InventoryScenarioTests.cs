@@ -370,6 +370,45 @@ public class InventoryScenarioTests
     }
 
     [Test]
+    public async Task UnresolvableSdk_IsReportedAsEvaluationFailure_NotAsMissingImports()
+    {
+        // IgnoreMissingImports alone would swallow an unresolved Sdk= and leave a half-evaluated project that looks complete.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("App/App.csproj", "<Project Sdk=\"Does.Not.Exist.Sdk/1.0.0\">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n  </PropertyGroup>\n</Project>");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+        InventoryBlocker blocker = project.Blockers.Single();
+        await Assert.That(blocker.Code).IsEqualTo(BlockerCodes.EvaluationFailed);
+        await Assert.That(blocker.Message).Contains("Does.Not.Exist.Sdk");
+    }
+
+    [Test]
+    public async Task CircularImport_IsReportedAsEvaluationFailure_NotAcceptedAsComplete()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("App/a.props", "<Project>\n  <Import Project=\"b.props\" />\n</Project>")
+            .Write("App/b.props", "<Project>\n  <Import Project=\"a.props\" />\n</Project>")
+            .WriteProject("App/App.csproj", "  <Import Project=\"a.props\" />");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+        await Assert.That(project.Blockers.Select(b => b.Code)).Contains(BlockerCodes.EvaluationFailed);
+    }
+
+    [Test]
+    public async Task ImportGlobWithNoMatches_IsNotABlocker()
+    {
+        // MSBuild documents an unmatched glob as a normal, non-ignored import.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj", "  <Import Project=\"*.nomatch\" />");
+
+        await Assert.That(workspace.Inventory("App/App.csproj").Projects.Single().Blockers).IsEmpty();
+    }
+
+    [Test]
     public async Task ImportedTwice_IsNotAnEvaluationFailure()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()

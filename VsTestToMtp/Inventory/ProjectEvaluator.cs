@@ -30,6 +30,11 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
 
     private readonly ProjectBlockerDetector _blockerDetector = new(formatter);
 
+    // Documented for evaluating several projects: one context extends the lifetime of evaluation caches (file system, SDK
+    // resolution). It is created per inventory run and thrown away afterwards, as the docs require when the environment may change.
+    private readonly Microsoft.Build.Evaluation.Context.EvaluationContext _msBuildContext =
+        Microsoft.Build.Evaluation.Context.EvaluationContext.Create(Microsoft.Build.Evaluation.Context.EvaluationContext.SharingPolicy.Shared);
+
     private readonly Dictionary<string, string> _globalProperties = new(StringComparer.OrdinalIgnoreCase)
     {
         // Ignore obj/*.nuget.g.props/targets so the result does not depend on whether (or when) the project was restored.
@@ -121,10 +126,18 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             {
                 GlobalProperties = global,
                 ProjectCollection = collection,
+                EvaluationContext = _msBuildContext,
+
+                // Missing/invalid/empty imports are tolerated so we can keep evaluating and report them with locations
+                // (see ImportLogger). Anything else that makes the evaluation incomplete must fail loudly instead:
+                // FailOnUnresolvedSdk keeps IgnoreMissingImports from also swallowing an unresolvable Sdk=, and
+                // RejectCircularImports stops a circular import from being accepted as a complete evaluation.
                 LoadSettings = ProjectLoadSettings.RecordEvaluatedItemElements
                     | ProjectLoadSettings.IgnoreMissingImports
                     | ProjectLoadSettings.IgnoreInvalidImports
-                    | ProjectLoadSettings.IgnoreEmptyImports,
+                    | ProjectLoadSettings.IgnoreEmptyImports
+                    | ProjectLoadSettings.FailOnUnresolvedSdk
+                    | ProjectLoadSettings.RejectCircularImports,
             });
         }
         catch (InvalidProjectFileException ex)
