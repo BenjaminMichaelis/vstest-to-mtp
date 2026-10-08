@@ -5,7 +5,9 @@ namespace VsTestToMtp.Inventory;
 /// <summary>
 /// Builds a read-only inventory of a <c>.csproj</c>, <c>.sln</c> or <c>.slnx</c>: exact solution membership,
 /// per-target-framework evaluated MSBuild state with provenance, and test-application classification.
-/// Nothing is restored, built or written, and anything that cannot be determined becomes a blocker.
+/// Nothing in the repository is restored, built or written, and anything that cannot be determined becomes a blocker.
+/// As with any MSBuild evaluation, an SDK referenced with a version (such as <c>MSTest.Sdk/3.6.4</c>) that is not yet in the
+/// NuGet global packages folder is downloaded there by MSBuild's NuGet SDK resolver, as <c>dotnet restore</c> would.
 /// </summary>
 public static class InventoryBuilder
 {

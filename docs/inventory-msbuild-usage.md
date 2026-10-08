@@ -42,6 +42,12 @@ These come from NuGet's behavior, not MSBuild's, and are covered by tests in `In
 
 ## Known limits
 
+- An SDK referenced with a version (`Sdk="MSTest.Sdk/3.6.4"`) is resolved by MSBuild's NuGet SDK resolver, which downloads a missing package
+  into the NuGet global packages folder (never the repository). We leave it on, as Roslyn's MSBuildWorkspace, slngen, `dotnet new` and NuGet do;
+  disabling it would make every MSTest.Sdk project un-inventoryable even after a restore. `MSBUILDDISABLENUGETSDKRESOLVER=1` is the resolver's
+  only off switch ([NuGetSdkResolver.cs](https://github.com/NuGet/NuGet.Client/blob/b337f5b80d3363a61f773f2e1c3757526a474610/src/NuGet.Core/Microsoft.Build.NuGetSdkResolver/NuGetSdkResolver.cs#L56-L60));
+  with it set, such projects surface as `EvaluationFailed` blockers.
+
 - One MSBuild/SDK per process (see above). Inventorying repositories that pin different SDKs needs one process per SDK.
 - Package-contributed properties (from `obj/*.nuget.g.props`) are deliberately not seen; package evidence comes from `TestPackageCatalog`.
 - Condition analysis follows property references in conditions; it does not evaluate conditions itself.
