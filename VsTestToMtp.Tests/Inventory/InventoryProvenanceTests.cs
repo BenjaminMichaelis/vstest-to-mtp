@@ -134,6 +134,46 @@ public class InventoryProvenanceTests
     }
 
     [Test]
+    public async Task VersionOverride_IsIgnored_WhenCentralPackageManagementIsOff()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj", "  <ItemGroup>\n    <PackageReference Include=\"NUnit\" VersionOverride=\"4.0.0\" />\n  </ItemGroup>");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(nunit.Version).IsNull();
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo(
+            [BlockerCodes.IneffectiveVersionOverride, BlockerCodes.UnresolvedPackageVersion]);
+    }
+
+    [Test]
+    public async Task VersionOverride_IsIgnored_WhenOverridesAreDisabled()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                    <CentralPackageVersionOverrideEnabled>false</CentralPackageVersionOverrideEnabled>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", "  <ItemGroup>\n    <PackageReference Include=\"NUnit\" VersionOverride=\"4.0.0\" />\n  </ItemGroup>");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.Central);
+        await Assert.That(nunit.Version).IsEqualTo("4.3.2");
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.IneffectiveVersionOverride]);
+    }
+
+    [Test]
     public async Task PropertyNames_AreCaseInsensitive_AndReportedCanonically()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()

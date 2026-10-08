@@ -496,6 +496,38 @@ public class InventoryScenarioTests
     }
 
     [Test]
+    public async Task IsTestProjectCondition_InExplicitlyImportedProps_FollowsEvaluationOrder()
+    {
+        const string guarded = "<Project>\n  <PropertyGroup Condition=\"'$(IsTestProject)' == 'true'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n</Project>";
+        const string assign = "  <PropertyGroup>\n    <IsTestProject>true</IsTestProject>\n  </PropertyGroup>\n";
+        const string import = "  <Import Project=\"shared.props\" />\n";
+
+        using ScenarioWorkspace before = new ScenarioWorkspace()
+            .Write("App/shared.props", guarded)
+            .WriteProject("App/App.csproj", import + assign);
+        using ScenarioWorkspace after = new ScenarioWorkspace()
+            .Write("App/shared.props", guarded)
+            .WriteProject("App/App.csproj", assign + import);
+
+        InventoryBlocker blocker = before.Inventory("App/App.csproj").Projects.Single().Blockers
+            .Single(b => b.Code == BlockerCodes.IsTestProjectEarlyCondition);
+        await Assert.That(blocker.Location!.File).IsEqualTo("App/shared.props");
+        await Assert.That(after.Inventory("App/App.csproj").Projects.Single().Blockers.Select(b => b.Code))
+            .DoesNotContain(BlockerCodes.IsTestProjectEarlyCondition);
+    }
+
+    [Test]
+    public async Task IsTestProjectCondition_InImportedProps_IsFlagged_WhenNothingInTheRepositoryAssignsIt()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("App/shared.props", "<Project>\n  <PropertyGroup Condition=\"'$(IsTestProject)' == 'true'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n</Project>")
+            .WriteProject("App/App.csproj", "  <Import Project=\"shared.props\" />");
+
+        await Assert.That(workspace.Inventory("App/App.csproj").Projects.Single().Blockers.Select(b => b.Code))
+            .Contains(BlockerCodes.IsTestProjectEarlyCondition);
+    }
+
+    [Test]
     public async Task IsTestProjectCondition_InDirectoryBuildTargets_IsNotFlagged()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()

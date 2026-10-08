@@ -67,34 +67,49 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     /// </summary>
     public void AddEarlyIsTestProjectBlockers(Project project, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
     {
+        EvaluationOrder order = new(project);
+        int? firstDefinition = EarliestRepositoryDefinition(project.GetProperty("IsTestProject"), context, order);
+
         foreach (ResolvedImport import in project.Imports)
         {
             string file = import.ImportedProject.FullPath;
-            if (!context.IsRepositoryFile(file)
-                || !file.EndsWith(".props", StringComparison.OrdinalIgnoreCase)
-                || IsImportedFromProjectBody(import, context))
+            if (!context.IsRepositoryFile(file) || !file.EndsWith(".props", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
             foreach (ProjectElement element in import.ImportedProject.AllChildren)
             {
-                if (element.Condition.Length > 0 && IsTestProjectReference().IsMatch(element.Condition))
+                // Only a definition in a repository file that is evaluated first makes the value reliable here; an
+                // import that comes before the project assigns IsTestProject (or when nothing in the repository assigns it,
+                // leaving it to restore-time package props) sees it unset.
+                if (element.Condition.Length > 0
+                    && IsTestProjectReference().IsMatch(element.Condition)
+                    && !(firstDefinition is { } defined && order.IndexOf(element) is { } at && defined < at))
                 {
                     blockers.Add(new InventoryBlocker(
                         BlockerCodes.IsTestProjectEarlyCondition, BlockerSeverity.Warning,
-                        $"'{formatter.Format(file)}' is evaluated before the project body but conditions on $(IsTestProject), which is not yet reliable there.",
-                        "Move this logic to Directory.Build.targets, or detect test projects from package references instead of IsTestProject.",
+                        $"'{formatter.Format(file)}' conditions on $(IsTestProject) before anything in the repository has reliably set it, so the condition may not see the final value.",
+                        "Move this logic to Directory.Build.targets, import the file after IsTestProject is assigned, or detect test projects from package references instead of IsTestProject.",
                         displayPath, context.LocationOf(element)));
                 }
             }
         }
     }
 
-    private static bool IsImportedFromProjectBody(ResolvedImport import, EvaluationContext context) =>
-        import.ImportingElement is { } element
-        && string.IsNullOrEmpty(element.Sdk)
-        && PathComparison.Equal(element.ContainingProject.FullPath, context.ProjectPath);
+    private static int? EarliestRepositoryDefinition(ProjectProperty? property, EvaluationContext context, EvaluationOrder order)
+    {
+        int? earliest = null;
+        for (ProjectProperty? definition = property; definition is not null; definition = definition.Predecessor)
+        {
+            if (definition.Xml is { } xml && context.IsRepositoryFile(xml.Location.File) && order.IndexOf(xml) is { } index)
+            {
+                earliest = Math.Min(earliest ?? index, index);
+            }
+        }
+
+        return earliest;
+    }
 
     /// <summary>
     /// Flags conditions on elements that matter for migration (relevant properties, package/project references, imports)

@@ -22,6 +22,7 @@ public static class BlockerCodes
     public const string ConditionDependsOnEnvironment = "ConditionDependsOnEnvironment";
     public const string IsTestProjectEarlyCondition = "IsTestProjectEarlyCondition";
     public const string UnresolvedPackageVersion = "UnresolvedPackageVersion";
+    public const string IneffectiveVersionOverride = "IneffectiveVersionOverride";
     public const string TestEvidenceOnlyFromImports = "TestEvidenceOnlyFromImports";
     public const string TargetFrameworkClassificationDiffers = "TargetFrameworkClassificationDiffers";
 }

@@ -154,8 +154,12 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         }
 
         // A PackageVersion only supplies versions when Central Package Management is on; NuGet ignores it otherwise.
+        // VersionOverride additionally needs overrides enabled, which is the default.
+        bool centralManagement = MsBuildBoolean.TryParse(project.GetPropertyValue("ManagePackageVersionsCentrally"), out bool cpm) && cpm;
+        bool overrideAllowed = centralManagement
+            && !(MsBuildBoolean.TryParse(project.GetPropertyValue("CentralPackageVersionOverrideEnabled"), out bool enabled) && !enabled);
         Dictionary<string, ProjectItem> central = new(StringComparer.OrdinalIgnoreCase);
-        if (MsBuildBoolean.TryParse(project.GetPropertyValue("ManagePackageVersionsCentrally"), out bool centralManagement) && centralManagement)
+        if (centralManagement)
         {
             foreach (ProjectItem version in project.GetItems("PackageVersion"))
             {
@@ -168,7 +172,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         {
             foreach (ProjectItem item in project.GetItems(itemType))
             {
-                packages.Add(CapturePackage(project, item, itemType == "GlobalPackageReference", central, context, displayPath, blockers));
+                packages.Add(CapturePackage(project, item, itemType == "GlobalPackageReference", central, overrideAllowed, context, displayPath, blockers));
             }
         }
 
@@ -234,6 +238,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         ProjectItem item,
         bool isGlobal,
         Dictionary<string, ProjectItem> central,
+        bool overrideAllowed,
         EvaluationContext context,
         string displayPath,
         List<InventoryBlocker> blockers)
@@ -273,7 +278,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         {
             (version, versionSource, versionDefinition) = (inline, PackageVersionSource.Inline, MetadataProvenance(item, "Version", context, definition));
         }
-        else if (versionOverride.Length > 0)
+        else if (versionOverride.Length > 0 && overrideAllowed)
         {
             (version, versionSource, versionDefinition) = (versionOverride, PackageVersionSource.VersionOverride, MetadataProvenance(item, "VersionOverride", context, definition));
         }
@@ -292,6 +297,15 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
                     "Add a Version, or a PackageVersion entry in the nearest Directory.Packages.props.",
                     displayPath, definition.Location));
             }
+        }
+
+        if (versionOverride.Length > 0 && !overrideAllowed && definition.IsRepositoryFile)
+        {
+            blockers.Add(new InventoryBlocker(
+                BlockerCodes.IneffectiveVersionOverride, BlockerSeverity.Warning,
+                $"PackageReference '{name}' sets VersionOverride, which is ignored unless Central Package Management is on and CentralPackageVersionOverrideEnabled is not false.",
+                "Enable Central Package Management (and version overrides), or use Version instead of VersionOverride.",
+                displayPath, definition.Location));
         }
 
         return new PackageReferenceState(name, version, versionSource, isGlobal, definition, modifiers, versionDefinition);
