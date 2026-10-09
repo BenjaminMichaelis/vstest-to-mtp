@@ -421,6 +421,24 @@ public class InventoryScenarioTests
     }
 
     [Test]
+    public async Task SkippedImports_AreReportedOnlyForTheProjectThatHasThem()
+    {
+        // All projects in one run share an MSBuild ProjectCollection (and its logger), so each skipped import must still be
+        // attributed to the project whose evaluation produced it.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("Broken/Broken.csproj", "  <Import Project=\"missing.props\" />")
+            .WriteProject("Fine/Fine.csproj")
+            .WriteProject("Later/Later.csproj")
+            .WriteSlnx("All.slnx", "Broken/Broken.csproj", "Fine/Fine.csproj", "Later/Later.csproj");
+
+        IReadOnlyList<ProjectInventory> projects = workspace.Inventory("All.slnx").Projects;
+
+        await Assert.That(projects.Single(p => p.Name == "Broken").Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MissingImport]);
+        await Assert.That(projects.Single(p => p.Name == "Fine").Blockers).IsEmpty();
+        await Assert.That(projects.Single(p => p.Name == "Later").Blockers).IsEmpty();
+    }
+
+    [Test]
     public async Task ImportWhoseConditionHoldsButPathIsEmpty_IsAMissingImport()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()

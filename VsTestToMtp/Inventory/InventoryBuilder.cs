@@ -80,7 +80,7 @@ public static class InventoryBuilder
     private static List<ProjectInventory> EvaluateRegistered(SolutionReader.Selection selection, PathFormatter formatter)
     {
         HashSet<string> selected = new(selection.ProjectPaths, PathComparison.Comparer);
-        ProjectEvaluator evaluator = new(formatter, selected);
+        using ProjectEvaluator evaluator = new(formatter, selected);
 
         lock (EvaluationLock)
         {

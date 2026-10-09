@@ -11,7 +11,7 @@ namespace VsTestToMtp.Inventory;
 /// properties, package references, project references and imports the inventory reports, with provenance.
 /// Must only be used after <see cref="MsBuildEnvironment.TryRegister"/> succeeded.
 /// </summary>
-internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<string> selectedProjects)
+internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<string> selectedProjects) : IDisposable
 {
     internal static readonly string[] RelevantProperties =
     [
@@ -36,6 +36,15 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
     private readonly EvaluationContext _msBuildContext =
         EvaluationContext.Create(EvaluationContext.SharingPolicy.Shared);
 
+    private readonly ImportLogger _logger = new();
+
+    // One collection per inventory run, as Roslyn's MSBuildWorkspace and slngen do: EvaluationContext does not cache parsed XML,
+    // so a collection per project re-parsed every SDK and Directory.*.props file for each project. Global properties are passed on
+    // each load (ProjectOptions), not on the collection. Projects are unloaded after each evaluation; disposing does not unload them.
+    // https://github.com/dotnet/roslyn/blob/33c9ed52c54827abaff4d4a2fb1f45efd7e5ac99/src/Workspaces/MSBuild/BuildHost/Build/ProjectBuildManager.cs#L258
+    // https://github.com/dotnet/msbuild/blob/74878b50aab1c07a7cdcaa15f28115768388cdcc/src/Build/Evaluation/Context/EvaluationContext.cs#L54-L71
+    private ProjectCollection Collection => field ??= new(globalProperties: null, [_logger], ToolsetDefinitionLocations.Default);
+
     private readonly Dictionary<string, string> _globalProperties = new(StringComparer.OrdinalIgnoreCase)
     {
         // Ignore obj/*.nuget.g.props/targets so the result does not depend on whether (or when) the project was restored.
@@ -50,11 +59,29 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
     {
         string displayPath = formatter.Format(projectPath);
         List<InventoryBlocker> blockers = [];
-        ImportLogger logger = new();
 
-        // Global properties are passed once, on each load (ProjectOptions), not also on the collection.
-        using ProjectCollection collection = new(globalProperties: null, [logger], ToolsetDefinitionLocations.Default);
+        // Projects are evaluated one at a time (InventoryBuilder holds a lock), so everything the shared logger records from here on
+        // belongs to this project, including imports skipped by a load that then failed.
+        int firstSkipped = _logger.Skipped.Count;
+        try
+        {
+            return Evaluate(projectPath, displayPath, blockers, () => _logger.Skipped[firstSkipped..]);
+        }
+        finally
+        {
+            Collection.UnloadAllProjects();
+        }
+    }
 
+    public void Dispose()
+    {
+        Collection.UnloadAllProjects();
+        Collection.Dispose();
+    }
+
+    private EvaluatedProject Evaluate(string projectPath, string displayPath, List<InventoryBlocker> blockers, Func<IReadOnlyList<SkippedImport>> skippedImports)
+    {
+        ProjectCollection collection = Collection;
         Project? outer = Load(collection, projectPath, null, displayPath, blockers);
         if (outer is null)
         {
@@ -105,7 +132,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             }
         }
 
-        _blockerDetector.AddImportBlockers(logger, outerResolver, displayPath, blockers);
+        _blockerDetector.AddImportBlockers(skippedImports(), outerResolver, displayPath, blockers);
         foreach ((Project project, ProvenanceResolver resolver) in evaluated)
         {
             _blockerDetector.AddEarlyIsTestProjectBlockers(project, resolver, displayPath, blockers);

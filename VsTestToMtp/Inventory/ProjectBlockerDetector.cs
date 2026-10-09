@@ -27,9 +27,9 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
         "PackageReference", "PackageVersion", "GlobalPackageReference", "ProjectReference",
     };
 
-    public void AddImportBlockers(ImportLogger logger, ProvenanceResolver resolver, string displayPath, List<InventoryBlocker> blockers)
+    public void AddImportBlockers(IEnumerable<SkippedImport> skippedImports, ProvenanceResolver resolver, string displayPath, List<InventoryBlocker> blockers)
     {
-        foreach (SkippedImport skipped in logger.Skipped)
+        foreach (SkippedImport skipped in skippedImports)
         {
             string importingFile = skipped.ImportingFile.Length == 0 ? resolver.ProjectPath : skipped.ImportingFile;
             if (!resolver.IsRepositoryFile(importingFile))
