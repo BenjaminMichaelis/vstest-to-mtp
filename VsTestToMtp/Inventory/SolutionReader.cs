@@ -75,7 +75,7 @@ internal static class SolutionReader
         {
             return Failed(SelectionKind.Directory, directory, BlockerCodes.AmbiguousSelection,
                 $"'{formatter.Format(directory)}' contains several solutions: {string.Join(", ", solutions.Select(s => System.IO.Path.GetFileName(s)))}.",
-                "Pass the solution file you want to inventory.", formatter);
+                "Pass the solution file you want to inventory.", formatter, [.. solutions.Select(s => formatter.Location(s))]);
         }
 
         string[] projects = [.. files.Where(f => HasExtension(f, ".csproj"))];
@@ -142,6 +142,7 @@ internal static class SolutionReader
         return new Selection(kind, solutionPath, [.. projects.Distinct(PathComparison.Comparer)], blockers);
     }
 
-    private static Selection Failed(SelectionKind kind, string path, string code, string message, string remediation, PathFormatter formatter) =>
-        new(kind, path, [], [new InventoryBlocker(code, BlockerSeverity.Error, message, remediation, null, formatter.Location(path))]);
+    private static Selection Failed(
+        SelectionKind kind, string path, string code, string message, string remediation, PathFormatter formatter, IReadOnlyList<SourceLocation>? related = null) =>
+        new(kind, path, [], [new InventoryBlocker(code, BlockerSeverity.Error, message, remediation, null, formatter.Location(path)) { RelatedLocations = related ?? [] }]);
 }

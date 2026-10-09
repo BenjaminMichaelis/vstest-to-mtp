@@ -142,7 +142,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                 int? evaluatedAt = element is ProjectItemElement ? null : order.IndexOf(element);
                 foreach (string condition in ProvenanceResolver.Conditions(element))
                 {
-                    AddConditionBlockers(project, condition, location, evaluatedAt, order, displayPath, blockers);
+                    AddConditionBlockers(project, resolver, condition, location, evaluatedAt, order, displayPath, blockers);
                 }
             }
         }
@@ -150,6 +150,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
 
     private static void AddConditionBlockers(
         Project project,
+        ProvenanceResolver resolver,
         string condition,
         SourceLocation location,
         int? evaluatedAt,
@@ -183,7 +184,11 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                     BlockerCodes.ConditionDependsOnUnsetProperty, BlockerSeverity.Warning,
                     $"Condition '{condition}' at {location} depends on '{name}', {state}, so the guarded element is treated as absent/false.",
                     $"Set '{name}' before this element (for example in Directory.Build.props) or pass it as a global property if the guarded state matters.",
-                    displayPath, location));
+                    displayPath, location)
+                {
+                    // Where the property is (only later) defined, in evaluation order; empty when it is never set.
+                    RelatedLocations = [.. Definitions(value).Select(resolver.LocationOf)],
+                });
             }
             else if (source == PropertySourceAtEvaluation.Environment)
             {
@@ -234,6 +239,20 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
         }
 
         return PropertySourceAtEvaluation.Unset;
+    }
+
+    private static List<ProjectPropertyElement> Definitions(ProjectProperty? property)
+    {
+        List<ProjectPropertyElement> definitions = [];
+        for (ProjectProperty? definition = property; definition is not null; definition = definition.Predecessor)
+        {
+            if (definition.Xml is { } xml)
+            {
+                definitions.Insert(0, xml);
+            }
+        }
+
+        return definitions;
     }
 
     private enum PropertySourceAtEvaluation

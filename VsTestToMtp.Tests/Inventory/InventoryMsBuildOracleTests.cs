@@ -59,7 +59,7 @@ public class InventoryMsBuildOracleTests
                 // MSBuild rejects the value (MSB4113), so the classification must be undeterminable, not guessed.
                 await Assert.That(evaluated.Blockers.Select(b => b.Message)).Contains(m => m.Contains("MSB4113"));
                 await Assert.That(classified.Classification).IsEqualTo(ProjectClassification.Unknown);
-                await Assert.That(classified.Blockers.Select(b => b.Code)).Contains(BlockerCodes.InvalidIsTestProject);
+                await Assert.That(classified.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.InvalidIsTestProject]);
                 break;
         }
     }

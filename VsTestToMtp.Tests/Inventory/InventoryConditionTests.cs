@@ -26,7 +26,8 @@ public class InventoryConditionTests
 
         InventoryBlocker blocker = Blockers(workspace).Single(b => b.Code == BlockerCodes.ConditionDependsOnUnsetProperty);
 
-        await Assert.That(blocker.Message).Contains("later");
+        // The property is defined, but only after the condition that tests it.
+        await Assert.That(blocker.RelatedLocations.Select(l => (l.File, l.Line))).IsEquivalentTo([("App/App.csproj", workspace.LineOf("App/App.csproj", "<Flag>"))]);
         await Assert.That(blocker.Location!.File).IsEqualTo("App/App.csproj");
         // The guarded element is the IsPackable property inside the conditioned PropertyGroup.
         await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "<IsPackable>"));
@@ -59,7 +60,7 @@ public class InventoryConditionTests
             .Write("Directory.Build.targets", "<Project>\n" + DefineFlag + "\n</Project>")
             .WriteProject("App/App.csproj", GuardedProperty);
 
-        await Assert.That(Blockers(workspace).Select(b => b.Code)).Contains(BlockerCodes.ConditionDependsOnUnsetProperty);
+        await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnUnsetProperty]);
     }
 
     [Test]
@@ -120,7 +121,7 @@ public class InventoryConditionTests
         Environment.SetEnvironmentVariable(variable, "true");
         try
         {
-            await Assert.That(Blockers(workspace).Select(b => b.Code)).Contains(BlockerCodes.ConditionDependsOnEnvironment);
+            await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnEnvironment]);
         }
         finally
         {
@@ -142,7 +143,7 @@ public class InventoryConditionTests
         Environment.SetEnvironmentVariable(variable, "1");
         try
         {
-            await Assert.That(Blockers(workspace).Select(b => b.Code)).Contains(BlockerCodes.ConditionDependsOnEnvironment);
+            await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnEnvironment]);
         }
         finally
         {
@@ -183,7 +184,7 @@ public class InventoryConditionTests
                 "App/App.csproj",
                 "  <PropertyGroup Condition=\"'$(MSBuildFeatureFlag)' == 'on'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
 
-        await Assert.That(Blockers(workspace).Select(b => b.Code)).Contains(BlockerCodes.ConditionDependsOnUnsetProperty);
+        await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnUnsetProperty]);
     }
 
     [Test]
@@ -198,7 +199,7 @@ public class InventoryConditionTests
         Environment.SetEnvironmentVariable(variable, "true");
         try
         {
-            await Assert.That(Blockers(workspace).Select(b => b.Code)).Contains(BlockerCodes.ConditionDependsOnEnvironment);
+            await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnEnvironment]);
         }
         finally
         {

@@ -47,7 +47,10 @@ internal sealed class PackageVersionResolver
                 BlockerCodes.DuplicatePackageVersion, BlockerSeverity.Warning,
                 $"PackageVersion '{group.Key}' is declared {definitions.Length} times ({string.Join(", ", definitions.Select(d => d.Location))}), so its central version is ambiguous.",
                 "Keep one PackageVersion per package (use Update to change a version declared elsewhere).",
-                displayPath, definitions[^1].Location));
+                displayPath, definitions[^1].Location)
+            {
+                RelatedLocations = [.. definitions.Select(d => d.Location)],
+            });
         }
     }
 

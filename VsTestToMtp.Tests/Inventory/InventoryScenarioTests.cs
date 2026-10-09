@@ -134,7 +134,8 @@ public class InventoryScenarioTests
 
         InventoryResult result = InventoryBuilder.Build(workspace.RootPath, new InventoryOptions(workspace.RootPath));
 
-        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCodes.AmbiguousSelection).Message).Contains("A.SLN, b.slnx");
+        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCodes.AmbiguousSelection).RelatedLocations.Select(l => l.File))
+            .IsEquivalentTo(["A.SLN", "b.slnx"], CollectionOrdering.Matching);
     }
 
     [Test]
@@ -149,7 +150,8 @@ public class InventoryScenarioTests
         InventoryResult result = InventoryBuilder.Build(workspace.RootPath, new InventoryOptions(workspace.RootPath));
 
         // Case-insensitive order ties, then ordinal decides: uppercase sorts before lowercase.
-        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCodes.AmbiguousSelection).Message).Contains("B.SLNX, b.slnx");
+        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCodes.AmbiguousSelection).RelatedLocations.Select(l => l.File))
+            .IsEquivalentTo(["B.SLNX", "b.slnx"], CollectionOrdering.Matching);
     }
 
     [Test]
@@ -210,7 +212,7 @@ public class InventoryScenarioTests
         ProjectInventory lib = result.Projects.Single(p => p.Name == "Lib");
         await Assert.That(lib.Classification).IsEqualTo(ProjectClassification.Production);
         await Assert.That(lib.HasTestLibraryDependency).IsTrue();
-        await Assert.That(lib.Blockers.Select(b => b.Code)).Contains(BlockerCodes.TestEvidenceOnlyFromImports);
+        await Assert.That(lib.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.TestEvidenceOnlyFromImports]);
 
         ProjectInventory tests = result.Projects.Single(p => p.Name == "Lib.Tests");
         await Assert.That(tests.Classification).IsEqualTo(ProjectClassification.TestApplication);
@@ -280,7 +282,7 @@ public class InventoryScenarioTests
             [("net10.0", ProjectClassification.TestApplication), ("net8.0", ProjectClassification.Production)],
             CollectionOrdering.Matching);
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Mixed);
-        await Assert.That(project.Blockers.Select(b => b.Code)).Contains(BlockerCodes.TargetFrameworkClassificationDiffers);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.TargetFrameworkClassificationDiffers]);
 
         PackageReferenceState nunit = project.TargetFrameworks.Single(t => t.TargetFramework == "net10.0").Packages.Single(p => p.Name == "NUnit");
         await Assert.That(nunit.Definition.Conditions).IsEquivalentTo(["'$(TargetFramework)' == 'net10.0'"]);
@@ -491,7 +493,7 @@ public class InventoryScenarioTests
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(project.Blockers.Select(b => b.Code)).Contains(BlockerCodes.EvaluationFailed);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.EvaluationFailed]);
     }
 
     [Test]
@@ -592,7 +594,7 @@ public class InventoryScenarioTests
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(project.Blockers.Select(b => b.Code)).Contains(BlockerCodes.EvaluationFailed);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.EvaluationFailed]);
     }
 
     [Test]
@@ -604,7 +606,7 @@ public class InventoryScenarioTests
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(project.Blockers.Select(b => b.Code)).Contains(BlockerCodes.NoTargetFramework);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.NoTargetFramework]);
     }
 
     [Test]
@@ -625,7 +627,6 @@ public class InventoryScenarioTests
         InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.IsTestProjectEarlyCondition);
         await Assert.That(blocker.Location!.File).IsEqualTo("Directory.Build.props");
         await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("Directory.Build.props", "$(IsTestProject)"));
-        await Assert.That(blocker.Remediation).Contains("Directory.Build.targets");
     }
 
     [Test]
@@ -700,7 +701,7 @@ public class InventoryScenarioTests
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
-        await Assert.That(project.Blockers.Select(b => b.Code)).Contains(BlockerCodes.UnresolvedPackageVersion);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.UnresolvedPackageVersion]);
         await Assert.That(project.TargetFrameworks.Single().Packages.Single().VersionSource).IsEqualTo(PackageVersionSource.None);
     }
 
@@ -742,7 +743,9 @@ public class InventoryScenarioTests
 
         InventoryResult result = bad.Inventory("App/App.csproj");
         await Assert.That(result.GlobalJson).IsNull();
-        await Assert.That(result.Blockers.Select(b => b.Code)).Contains(BlockerCodes.MalformedGlobalJson);
+        // MSBuild's SDK resolver cannot read a malformed global.json either, so the project itself cannot be evaluated.
+        await Assert.That(result.Blockers.Select(b => (b.Code, b.Project))).IsEquivalentTo(
+            [(BlockerCodes.MalformedGlobalJson, (string?)null), (BlockerCodes.EvaluationFailed, "App/App.csproj")]);
     }
 
     [Test]

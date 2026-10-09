@@ -198,7 +198,7 @@ public class InventoryProvenanceTests
         PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
         await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
         await Assert.That(nunit.Version).IsNull();
-        await Assert.That(project.Blockers.Select(b => b.Code)).Contains(BlockerCodes.UnresolvedPackageVersion);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.UnresolvedPackageVersion]);
     }
 
     [Test]
@@ -221,9 +221,11 @@ public class InventoryProvenanceTests
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         InventoryBlocker duplicate = project.Blockers.Single(b => b.Code == BlockerCodes.DuplicatePackageVersion);
-        await Assert.That(duplicate.Message).Contains("4.0.0").Or.Contains("Directory.Packages.props");
+        await Assert.That(duplicate.RelatedLocations.Select(l => (l.File, l.Line))).IsEquivalentTo(
+            [("Directory.Packages.props", workspace.LineOf("Directory.Packages.props", "4.0.0")), ("Directory.Packages.props", workspace.LineOf("Directory.Packages.props", "4.3.2"))],
+            CollectionOrdering.Matching);
         await Assert.That(project.TargetFrameworks.Single().Packages.Single().VersionSource).IsEqualTo(PackageVersionSource.None);
-        await Assert.That(project.Blockers.Select(b => b.Code)).Contains(BlockerCodes.UnresolvedPackageVersion);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.DuplicatePackageVersion, BlockerCodes.UnresolvedPackageVersion]);
     }
 
     [Test]
@@ -405,6 +407,6 @@ public class InventoryProvenanceTests
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
-        await Assert.That(project.Blockers.Select(b => b.Code)).Contains(BlockerCodes.ConditionDependsOnUnsetProperty);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnUnsetProperty]);
     }
 }

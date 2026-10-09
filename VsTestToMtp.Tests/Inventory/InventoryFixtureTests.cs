@@ -129,7 +129,10 @@ public class InventoryFixtureTests
 
         await Assert.That(globalJson).IsNotNull();
         await Assert.That(globalJson!.Path).IsEqualTo("global.json");
-        await Assert.That(globalJson.SdkVersion).StartsWith("10.");
+        using JsonDocument committed = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.RootPath, "global.json")));
+        JsonElement sdk = committed.RootElement.GetProperty("sdk");
+        await Assert.That(globalJson.SdkVersion).IsEqualTo(sdk.GetProperty("version").GetString());
+        await Assert.That(globalJson.RollForward).IsEqualTo(sdk.GetProperty("rollForward").GetString());
         await Assert.That(globalJson.TestRunner).IsNull();
     }
 
