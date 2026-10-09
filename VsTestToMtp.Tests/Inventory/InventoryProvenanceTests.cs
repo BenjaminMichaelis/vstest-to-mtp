@@ -1,5 +1,7 @@
 namespace VsTestToMtp.Tests.Inventory;
 
+using System.IO.Compression;
+
 using TUnit.Assertions.Enums;
 
 using VsTestToMtp.Inventory;
@@ -66,6 +68,72 @@ public class InventoryProvenanceTests
         PropertyState net8 = app.TargetFrameworks.Single(t => t.TargetFramework == "net8.0").GetProperty("IsPackable")!;
         await Assert.That(net8.Value).IsEqualTo("true");
         await Assert.That(net8.Definition!.IsRepositoryFile).IsFalse();
+    }
+
+    [Test]
+    public async Task FilesFromAVersionedSdkPackage_AreNotRepositoryFiles_WhereverNuGetPutsThem()
+    {
+        // NUGET_PACKAGES overrides NuGet.config's globalPackagesFolder, which this test relies on.
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the workspace's globalPackagesFolder would be ignored.");
+            return;
+        }
+
+        // The SDK package comes from a local feed and lands in a packages folder NuGet.config moves inside the workspace,
+        // so nothing about its path says "NuGet"; only MSBuild's SDK resolution does.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("NuGet.config", """
+                <configuration>
+                  <config>
+                    <add key="globalPackagesFolder" value="packages" />
+                  </config>
+                  <packageSources>
+                    <clear />
+                    <add key="local" value="feed" />
+                  </packageSources>
+                </configuration>
+                """)
+            .WriteProject("App/App.csproj", "  <Sdk Name=\"Local.Test.Sdk\" Version=\"1.0.0\" />");
+        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", "<Project>\n  <PropertyGroup>\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n</Project>");
+
+        ProjectInventory app = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(app.Blockers).IsEmpty();
+        PropertyState isPackable = app.TargetFrameworks.Single().GetProperty("IsPackable")!;
+        await Assert.That(isPackable.Value).IsEqualTo("false");
+        await Assert.That(isPackable.Definition!.Location.File).StartsWith("packages/");
+        await Assert.That(isPackable.Definition.IsRepositoryFile).IsFalse();
+        await Assert.That(app.Imports.Select(i => i.File)).DoesNotContain(f => f.StartsWith("packages/", StringComparison.Ordinal));
+    }
+
+    /// <summary>Writes a minimal MSBuild SDK package (<c>Sdk/Sdk.props</c> and <c>Sdk/Sdk.targets</c>) to a local feed.</summary>
+    private static void WriteSdkPackage(string feed, string id, string version, string props)
+    {
+        Directory.CreateDirectory(feed);
+        using ZipArchive package = ZipFile.Open(Path.Combine(feed, $"{id.ToLowerInvariant()}.{version}.nupkg"), ZipArchiveMode.Create);
+        Add($"{id}.nuspec", $"""
+            <?xml version="1.0"?>
+            <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+              <metadata>
+                <id>{id}</id>
+                <version>{version}</version>
+                <authors>tests</authors>
+                <description>Test SDK</description>
+                <packageTypes>
+                  <packageType name="MSBuildSdk" />
+                </packageTypes>
+              </metadata>
+            </package>
+            """);
+        Add("Sdk/Sdk.props", props);
+        Add("Sdk/Sdk.targets", "<Project />");
+
+        void Add(string entryName, string content)
+        {
+            using StreamWriter writer = new(package.CreateEntry(entryName).Open());
+            writer.Write(content);
+        }
     }
 
     [Test]

@@ -46,9 +46,10 @@ internal sealed class EvaluationOrder
         List<ProjectElement> tree = [.. root.AllChildren];
         HashSet<ProjectElement> inTree = [.. tree];
 
-        // Implicit SDK imports are not part of the document: Sdk.props first, Sdk.targets last.
+        // Implicit SDK imports are not part of the document; MSBuild records where each one goes (Sdk.props at the top, Sdk.targets at the bottom).
+        // https://github.com/dotnet/msbuild/blob/74878b50aab1c07a7cdcaa15f28115768388cdcc/src/Build/Construction/ProjectImportElement.cs#L126
         List<ProjectImportElement> implicitImports = [.. _imported.Keys.Where(e => ReferenceEquals(e.ContainingProject, root) && !inTree.Contains(e))];
-        foreach (ProjectImportElement import in implicitImports.Where(IsPropsImport))
+        foreach (ProjectImportElement import in implicitImports.Where(i => i.ImplicitImportLocation == ImplicitImportLocation.Top))
         {
             Visit(import);
         }
@@ -62,7 +63,7 @@ internal sealed class EvaluationOrder
             }
         }
 
-        foreach (ProjectImportElement import in implicitImports.Where(i => !IsPropsImport(i)))
+        foreach (ProjectImportElement import in implicitImports.Where(i => i.ImplicitImportLocation != ImplicitImportLocation.Top))
         {
             Visit(import);
         }
@@ -79,7 +80,4 @@ internal sealed class EvaluationOrder
             }
         }
     }
-
-    private static bool IsPropsImport(ProjectImportElement import) =>
-        import.Project.EndsWith(".props", StringComparison.OrdinalIgnoreCase);
 }

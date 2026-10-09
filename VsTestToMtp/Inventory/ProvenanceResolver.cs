@@ -9,26 +9,45 @@ internal sealed class ProvenanceResolver
     private readonly Dictionary<string, ResolvedImport> _importsByFile = new(PathComparison.Comparer);
     private readonly PathFormatter _formatter;
     private readonly string[] _externalRoots;
+    private readonly Project _project;
 
     public ProvenanceResolver(Project project, string projectPath, PathFormatter formatter)
     {
         ProjectPath = projectPath;
         _formatter = formatter;
+        _project = project;
 
         foreach (ResolvedImport import in project.Imports)
         {
             _importsByFile.TryAdd(import.ImportedProject.FullPath, import);
         }
 
-        // The .NET root (SDKs, packs, workload manifests) and the NuGet cache are not user-owned.
+        // Not user-owned: the .NET root (SDKs, packs, workload manifests), the NuGet cache, and every package an SDK was resolved from.
+        // The SDK itself reports the .NET root ($(NetCoreRoot)); MSBuild reports where each SDK resolved, which also covers a versioned
+        // SDK (MSTest.Sdk/x.y) restored to a globalPackagesFolder set in NuGet.config, which nothing else here can see.
         string toolsPath = project.GetPropertyValue("MSBuildToolsPath").TrimEnd('/', '\\');
-        string? dotnetRoot = toolsPath.Length == 0 ? null : Path.GetDirectoryName(Path.GetDirectoryName(toolsPath));
-        string nugetRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES")
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
-        _externalRoots = [.. new[] { dotnetRoot, nugetRoot }.Where(r => !string.IsNullOrEmpty(r)).Select(r => Path.GetFullPath(r!))];
+        string? dotnetRoot = project.GetPropertyValue("NetCoreRoot") is { Length: > 0 } netCoreRoot ? netCoreRoot
+            : toolsPath.Length == 0 ? null
+            : Path.GetDirectoryName(Path.GetDirectoryName(toolsPath));
+        string nugetRoot = project.GetPropertyValue("RestorePackagesPath") is { Length: > 0 } restorePackagesPath ? restorePackagesPath
+            : Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 } nugetPackages ? nugetPackages
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
+        IEnumerable<string?> sdkPackages = project.Imports
+            .Where(i => i.SdkResult is { Success: true })
+            .SelectMany(i => (IEnumerable<string?>)[i.SdkResult.Path, .. i.SdkResult.AdditionalPaths ?? []])
+            .Select(path => path is null ? null : Path.GetDirectoryName(path.TrimEnd('/', '\\')));
+        _externalRoots = [.. new[] { dotnetRoot, nugetRoot }.Concat(sdkPackages)
+            .Where(r => !string.IsNullOrEmpty(r))
+            .Select(r => Path.GetFullPath(r!).TrimEnd('/', '\\'))
+            .Distinct(PathComparison.Comparer)
+            // An SDK resolved from inside the repository must not turn the project's own directory tree into "external".
+            .Where(r => !Path.GetFullPath(projectPath).StartsWith(r + Path.DirectorySeparatorChar, PathComparison.Comparison))];
     }
 
     public string ProjectPath { get; }
+
+    /// <summary>The project's elements in evaluation order, built once and shared by every check that needs it.</summary>
+    public EvaluationOrder Order => field ??= new EvaluationOrder(_project);
 
     public bool IsRepositoryFile(string file)
     {

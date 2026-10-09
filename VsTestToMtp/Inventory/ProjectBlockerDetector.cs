@@ -74,7 +74,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     /// </summary>
     public void AddEarlyIsTestProjectBlockers(Project project, ProvenanceResolver resolver, string displayPath, List<InventoryBlocker> blockers)
     {
-        EvaluationOrder order = new(project);
+        EvaluationOrder order = resolver.Order;
         int? firstDefinition = EarliestRepositoryDefinition(project.GetProperty("IsTestProject"), resolver, order);
 
         foreach (ResolvedImport import in project.Imports)
@@ -127,7 +127,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     /// </summary>
     public static void AddConditionBlockers(Project project, ProvenanceResolver resolver, string displayPath, List<InventoryBlocker> blockers)
     {
-        EvaluationOrder order = new(project);
+        EvaluationOrder order = resolver.Order;
         IEnumerable<ProjectRootElement> roots = [project.Xml, .. project.Imports.Select(i => i.ImportedProject)];
         foreach (ProjectRootElement root in roots.DistinctBy(r => r.FullPath, PathComparison.Comparer))
         {
