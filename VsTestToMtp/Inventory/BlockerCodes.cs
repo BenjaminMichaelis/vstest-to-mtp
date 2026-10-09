@@ -12,6 +12,7 @@ public static class BlockerCodes
     public const string MsBuildNotFound = "MsBuildNotFound";
     public const string MsBuildSdkMismatch = "MsBuildSdkMismatch";
     public const string MsBuildSdkUnsupported = "MsBuildSdkUnsupported";
+    public const string MsBuildSdkNewerThanRuntime = "MsBuildSdkNewerThanRuntime";
     public const string UnreadableDirectory = "UnreadableDirectory";
     public const string EvaluationFailed = "EvaluationFailed";
     public const string MissingImport = "MissingImport";

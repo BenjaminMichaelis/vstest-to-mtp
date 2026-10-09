@@ -62,25 +62,8 @@ public static class InventoryBuilder
         PathFormatter formatter,
         List<InventoryBlocker> blockers)
     {
-        if (!MsBuildEnvironment.TryRegister(selectionDirectory, out string? errorCode, out string? error))
+        if (MsBuildEnvironment.TryRegister(selectionDirectory) is { } blocker)
         {
-            InventoryBlocker blocker = errorCode == BlockerCodes.MsBuildSdkUnsupported
-                ? new(
-                    BlockerCodes.MsBuildSdkUnsupported, BlockerSeverity.Error,
-                    error!,
-                    "Use a global.json that selects .NET SDK 8.0 or newer (the repository can be migrated with a newer SDK even if it targets older frameworks), then rerun.",
-                    null, null)
-                : errorCode == BlockerCodes.MsBuildSdkMismatch
-                ? new(
-                    BlockerCodes.MsBuildSdkMismatch, BlockerSeverity.Error,
-                    error!,
-                    "Inventory repositories that need different SDKs in separate processes (one vstest-to-mtp run per global.json).",
-                    null, null)
-                : new(
-                    BlockerCodes.MsBuildNotFound, BlockerSeverity.Error,
-                    $"MSBuild could not be located: {error}",
-                    "Install the .NET SDK that the repository's global.json selects, then rerun.",
-                    null, null);
             blockers.Add(blocker);
             return
             [

@@ -33,37 +33,69 @@ public class InventoryEnvironmentTests
     [Test]
     public async Task SelectionPinnedToADifferentSdkThanTheLoadedOne_IsReportedAsMismatch()
     {
-        // The process-wide MSBuild registration is whichever SDK resolves by default (the newest) or an earlier pin.
-        VisualStudioInstance[] sdks = [.. MSBuildLocator.QueryVisualStudioInstances(
-            new VisualStudioInstanceQueryOptions { DiscoveryTypes = DiscoveryType.DotNetSdk })
-            .OrderByDescending(i => i.Version)];
-        if (sdks.Length < 2)
+        // Every workspace pins the fixtures' SDK, so evaluating one first registers that SDK (or confirms it is already registered).
+        using ScenarioWorkspace pinnedLikeTheFixtures = new ScenarioWorkspace().WriteProject("App/App.csproj");
+        ProjectInventory evaluated = pinnedLikeTheFixtures.Inventory("App/App.csproj").Projects.Single();
+        await Assert.That(evaluated.Blockers).IsEmpty();
+
+        string registered = InstancesFor(pinnedLikeTheFixtures.RootPath).First().MSBuildPath;
+        VisualStudioInstance? other = InstancesFor(pinnedLikeTheFixtures.RootPath)
+            .FirstOrDefault(i => i.MSBuildPath != registered && i.Version.Major >= MinimumSdkMajorVersion && !IsNewerThanRuntime(i.Version));
+        if (other is null)
         {
-            Skip.Test("Needs at least two installed .NET SDKs.");
+            Skip.Test("Needs a second installed .NET SDK (8.0 or newer, no newer than the test runtime).");
+            return;
         }
 
-        static string Pin(Version sdk) => $"{{ \"sdk\": {{ \"version\": \"{sdk}\", \"rollForward\": \"disable\" }} }}";
-        using ScenarioWorkspace newest = new ScenarioWorkspace().Write("global.json", Pin(sdks[0].Version)).WriteProject("App/App.csproj");
-        using ScenarioWorkspace older = new ScenarioWorkspace().Write("global.json", Pin(sdks[1].Version)).WriteProject("App/App.csproj");
+        using ScenarioWorkspace pinnedElsewhere = new ScenarioWorkspace()
+            .Write("global.json", Pin(other.Version))
+            .WriteProject("App/App.csproj");
+        ProjectInventory refused = pinnedElsewhere.Inventory("App/App.csproj").Projects.Single();
 
-        ProjectInventory[] results =
-        [
-            newest.Inventory("App/App.csproj").Projects.Single(),
-            older.Inventory("App/App.csproj").Projects.Single(),
-        ];
-
-        // Which SDK is registered depends on what ran earlier in this process (the fixtures' pin, or one of these two), so do
-        // not assume it. Whatever it is, at most one of two selections pinned to different SDKs can have been evaluated, and
-        // the other must be refused rather than evaluated with the wrong SDK.
-        ProjectInventory[] refused = [.. results.Where(r => r.Blockers.Count > 0)];
-        await Assert.That(refused).IsNotEmpty();
-        foreach (ProjectInventory project in refused)
-        {
-            await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-            await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MsBuildSdkMismatch]);
-            await Assert.That(project.Blockers.Single().Remediation).Contains("separate processes");
-        }
+        await Assert.That(refused.Classification).IsEqualTo(ProjectClassification.Unknown);
+        InventoryBlocker blocker = refused.Blockers.Single();
+        await Assert.That(blocker.Code).IsEqualTo(BlockerCodes.MsBuildSdkMismatch);
+        await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
     }
+
+    [Test]
+    public async Task SelectionPinnedToAnSdkNewerThanTheRuntime_IsRefused_NotEvaluatedWithAnotherSdk()
+    {
+        // MSBuildLocator hides such SDKs by default, which used to make a different SDK come first without any error.
+        VisualStudioInstance? newer = InstancesFor(Environment.CurrentDirectory).FirstOrDefault(i => IsNewerThanRuntime(i.Version));
+        if (newer is null)
+        {
+            Skip.Test($"Needs an installed .NET SDK newer than the {Environment.Version.Major}.{Environment.Version.Minor} test runtime.");
+            return;
+        }
+
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("global.json", Pin(newer.Version))
+            .WriteProject("App/App.csproj");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MsBuildSdkNewerThanRuntime]);
+    }
+
+    private const int MinimumSdkMajorVersion = 8;
+
+    private static string Pin(Version sdk) => $"{{ \"sdk\": {{ \"version\": \"{sdk}\", \"rollForward\": \"disable\" }} }}";
+
+    // Same rule MSBuildLocator applies by default: an SDK's MSBuild needs at least the runtime it shipped with.
+    private static bool IsNewerThanRuntime(Version sdk) =>
+        sdk.Major > Environment.Version.Major || (sdk.Major == Environment.Version.Major && sdk.Minor > Environment.Version.Minor);
+
+    private static VisualStudioInstance[] InstancesFor(string workingDirectory) =>
+    [
+        .. MSBuildLocator.QueryVisualStudioInstances(new VisualStudioInstanceQueryOptions
+        {
+            DiscoveryTypes = DiscoveryType.DotNetSdk,
+            WorkingDirectory = workingDirectory,
+            AllowAllRuntimeVersions = true,
+        }),
+    ];
 
     [Test]
     [SkipUnlessReadDenialSupported]
