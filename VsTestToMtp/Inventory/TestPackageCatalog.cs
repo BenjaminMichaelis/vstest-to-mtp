@@ -1,6 +1,6 @@
 namespace VsTestToMtp.Inventory;
 
-public enum TestPackageRole
+internal enum TestPackageRole
 {
     /// <summary>A test framework (provides the attributes/assertions tests are written with).</summary>
     Framework,

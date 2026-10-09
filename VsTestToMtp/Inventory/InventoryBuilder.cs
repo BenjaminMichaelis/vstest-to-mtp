@@ -45,13 +45,7 @@ public static class InventoryBuilder
             projects,
             globalJson,
             automation,
-            [.. all
-                .DistinctBy(b => (b.Code, b.Project, b.Location, b.Message))
-                .OrderBy(b => b.Project, StringComparer.Ordinal)
-                .ThenBy(b => b.Code, StringComparer.Ordinal)
-                .ThenBy(b => b.Location?.File, StringComparer.Ordinal)
-                .ThenBy(b => b.Location?.Line)
-                .ThenBy(b => b.Message, StringComparer.Ordinal)]);
+            BlockerOrdering.Normalize(all));
     }
 
     // Kept separate and un-inlined: MSBuild must be registered before anything touching Microsoft.Build is JIT-compiled.

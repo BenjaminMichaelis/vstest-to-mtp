@@ -22,7 +22,7 @@ public class InventoryFixtureTests
         InventoryResult result = Inventory(fixture);
 
         await Assert.That(result.Projects.Select(p => p.Path)).IsEquivalentTo([ProductionProjectPath, TestProjectPath], CollectionOrdering.Matching);
-        await Assert.That(result.Selection.Kind).IsEqualTo("slnx");
+        await Assert.That(result.Selection.Kind).IsEqualTo(SelectionKind.Slnx);
         await Assert.That(result.Blockers).IsEmpty();
     }
 
@@ -153,7 +153,7 @@ public class InventoryFixtureTests
 
         InventoryResult result = InventoryBuilder.Build(fixture.TestProjectPath, new InventoryOptions(fixture.RootPath));
 
-        await Assert.That(result.Selection.Kind).IsEqualTo("project");
+        await Assert.That(result.Selection.Kind).IsEqualTo(SelectionKind.Project);
         await Assert.That(result.Projects.Select(p => p.Path)).IsEquivalentTo([TestProjectPath]);
         await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.TestApplication);
     }

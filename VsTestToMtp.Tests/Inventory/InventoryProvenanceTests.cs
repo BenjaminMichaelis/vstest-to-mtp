@@ -242,6 +242,20 @@ public class InventoryProvenanceTests
     }
 
     [Test]
+    public async Task VersionOverride_NextToAnInlineVersion_WithoutCentralPackageManagement_LeavesTheInlineVersionEffective()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj", "  <ItemGroup>\n    <PackageReference Include=\"NUnit\" Version=\"4.3.2\" VersionOverride=\"4.0.0\" />\n  </ItemGroup>");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.Inline);
+        await Assert.That(nunit.Version).IsEqualTo("4.3.2");
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.IneffectiveVersionOverride]);
+    }
+
+    [Test]
     public async Task VersionOverride_WhenOverridesAreDisabled_IsAnError_AndNotFallenBackToTheCentralVersion()
     {
         // NuGet fails restore (NU1013) instead of ignoring the override, so no version is effective.

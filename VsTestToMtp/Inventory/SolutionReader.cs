@@ -10,7 +10,7 @@ namespace VsTestToMtp.Inventory;
 internal static class SolutionReader
 {
     public sealed record Selection(
-        string Kind,
+        SelectionKind Kind,
         string Path,
         IReadOnlyList<string> ProjectPaths,
         IReadOnlyList<InventoryBlocker> Blockers);
@@ -25,7 +25,7 @@ internal static class SolutionReader
 
         string extension = System.IO.Path.GetExtension(fullPath).ToLowerInvariant();
         return !File.Exists(fullPath)
-            ? Failed("unknown", fullPath, BlockerCodes.SelectionNotFound,
+            ? Failed(SelectionKind.Unknown, fullPath, BlockerCodes.SelectionNotFound,
                 $"'{formatter.Format(fullPath)}' does not exist.",
                 "Pass an existing .csproj, .sln or .slnx file, or a directory containing exactly one solution.", formatter)
             : ResolveFile(fullPath, extension, formatter);
@@ -35,9 +35,9 @@ internal static class SolutionReader
     {
         return extension switch
         {
-            ".csproj" => new Selection("project", fullPath, [fullPath], []),
+            ".csproj" => new Selection(SelectionKind.Project, fullPath, [fullPath], []),
             ".sln" or ".slnx" => ReadSolution(fullPath, formatter),
-            _ => Failed("unknown", fullPath, BlockerCodes.UnsupportedSelection,
+            _ => Failed(SelectionKind.Unknown, fullPath, BlockerCodes.UnsupportedSelection,
                 $"'{formatter.Format(fullPath)}' is not a C# project or solution file.",
                 "Pass a .csproj, .sln or .slnx file.", formatter),
         };
@@ -51,7 +51,7 @@ internal static class SolutionReader
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return Failed("directory", directory, BlockerCodes.UnreadableDirectory,
+            return Failed(SelectionKind.Directory, directory, BlockerCodes.UnreadableDirectory,
                 $"'{formatter.Format(directory)}' could not be listed: {ex.Message}",
                 "Grant read access to the directory, or pass the solution or project file directly.", formatter);
         }
@@ -73,15 +73,15 @@ internal static class SolutionReader
 
         if (solutions.Length > 1)
         {
-            return Failed("directory", directory, BlockerCodes.AmbiguousSelection,
+            return Failed(SelectionKind.Directory, directory, BlockerCodes.AmbiguousSelection,
                 $"'{formatter.Format(directory)}' contains several solutions: {string.Join(", ", solutions.Select(s => System.IO.Path.GetFileName(s)))}.",
                 "Pass the solution file you want to inventory.", formatter);
         }
 
         string[] projects = [.. files.Where(f => HasExtension(f, ".csproj"))];
         return projects.Length == 1
-            ? new Selection("project", projects[0], [projects[0]], [])
-            : Failed("directory", directory, BlockerCodes.AmbiguousSelection,
+            ? new Selection(SelectionKind.Project, projects[0], [projects[0]], [])
+            : Failed(SelectionKind.Directory, directory, BlockerCodes.AmbiguousSelection,
                 $"'{formatter.Format(directory)}' contains no single solution or project.",
                 "Pass a .csproj, .sln or .slnx file.", formatter);
     }
@@ -138,10 +138,10 @@ internal static class SolutionReader
                 null, formatter.Location(solutionPath)));
         }
 
-        string kind = string.Equals(System.IO.Path.GetExtension(solutionPath), ".slnx", StringComparison.OrdinalIgnoreCase) ? "slnx" : "sln";
+        SelectionKind kind = string.Equals(System.IO.Path.GetExtension(solutionPath), ".slnx", StringComparison.OrdinalIgnoreCase) ? SelectionKind.Slnx : SelectionKind.Sln;
         return new Selection(kind, solutionPath, [.. projects.Distinct(PathComparison.Comparer)], blockers);
     }
 
-    private static Selection Failed(string kind, string path, string code, string message, string remediation, PathFormatter formatter) =>
+    private static Selection Failed(SelectionKind kind, string path, string code, string message, string remediation, PathFormatter formatter) =>
         new(kind, path, [], [new InventoryBlocker(code, BlockerSeverity.Error, message, remediation, null, formatter.Location(path))]);
 }

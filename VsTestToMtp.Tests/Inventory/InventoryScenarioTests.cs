@@ -48,7 +48,7 @@ public class InventoryScenarioTests
 
         InventoryResult result = workspace.Inventory("All.sln");
 
-        await Assert.That(result.Selection.Kind).IsEqualTo("sln");
+        await Assert.That(result.Selection.Kind).IsEqualTo(SelectionKind.Sln);
         await Assert.That(result.Projects.Select(p => p.Path)).IsEquivalentTo(["src/App/App.csproj"]);
         await Assert.That(result.Blockers.Select(b => b.Code)).IsEquivalentTo(
             [BlockerCodes.MissingProject, BlockerCodes.UnsupportedProjectLanguage]);
@@ -106,7 +106,7 @@ public class InventoryScenarioTests
 
         InventoryResult result = InventoryBuilder.Build(workspace.RootPath, new InventoryOptions(workspace.RootPath));
 
-        await Assert.That(result.Selection.Kind).IsEqualTo("slnx");
+        await Assert.That(result.Selection.Kind).IsEqualTo(SelectionKind.Slnx);
         await Assert.That(result.Projects.Select(p => p.Path)).IsEquivalentTo(["App/App.csproj"]);
         await Assert.That(result.Blockers).IsEmpty();
     }
@@ -119,7 +119,7 @@ public class InventoryScenarioTests
 
         InventoryResult result = InventoryBuilder.Build(workspace.RootPath, new InventoryOptions(workspace.RootPath));
 
-        await Assert.That(result.Selection.Kind).IsEqualTo("project");
+        await Assert.That(result.Selection.Kind).IsEqualTo(SelectionKind.Project);
         await Assert.That(result.Projects.Select(p => p.Path)).IsEquivalentTo(["App.CSPROJ"]);
         await Assert.That(result.Blockers).IsEmpty();
     }

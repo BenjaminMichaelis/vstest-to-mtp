@@ -14,7 +14,7 @@ internal static class TestProjectClassifier
             return new ProjectInventory(
                 evaluated.Path, name, ProjectClassification.Unknown, false, [],
                 [.. evaluated.TargetFrameworks.Select(tf => ToState(tf, ProjectClassification.Unknown, false, []))],
-                evaluated.Imports, Sorted(blockers));
+                evaluated.Imports, BlockerOrdering.Normalize(blockers));
         }
 
         List<TargetFrameworkState> states = [];
@@ -51,7 +51,7 @@ internal static class TestProjectClassifier
 
         return new ProjectInventory(
             evaluated.Path, name, overall, states.Any(s => s.HasTestLibraryDependency), frameworks,
-            states, evaluated.Imports, Sorted(blockers));
+            states, evaluated.Imports, BlockerOrdering.Normalize(blockers));
     }
 
     private static (ProjectClassification Classification, bool HasLibraryDependency, List<string> Evidence) ClassifyTargetFramework(
@@ -123,12 +123,4 @@ internal static class TestProjectClassifier
         bool hasLibraryDependency,
         IReadOnlyList<string> evidence) =>
         new(framework.TargetFramework, classification, hasLibraryDependency, evidence, framework.Properties, framework.Packages, framework.ProjectReferences);
-
-    private static List<InventoryBlocker> Sorted(List<InventoryBlocker> blockers) =>
-        [.. blockers
-            .DistinctBy(b => (b.Code, b.Location, b.Message))
-            .OrderBy(b => b.Code, StringComparer.Ordinal)
-            .ThenBy(b => b.Location?.File, StringComparer.Ordinal)
-            .ThenBy(b => b.Location?.Line)
-            .ThenBy(b => b.Message, StringComparer.Ordinal)];
 }
