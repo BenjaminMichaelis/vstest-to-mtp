@@ -27,12 +27,12 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
         "PackageReference", "PackageVersion", "GlobalPackageReference", "ProjectReference",
     };
 
-    public void AddImportBlockers(ImportLogger logger, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
+    public void AddImportBlockers(ImportLogger logger, ProvenanceResolver resolver, string displayPath, List<InventoryBlocker> blockers)
     {
         foreach (SkippedImport skipped in logger.Skipped)
         {
-            string importingFile = skipped.ImportingFile.Length == 0 ? context.ProjectPath : skipped.ImportingFile;
-            if (!context.IsRepositoryFile(importingFile))
+            string importingFile = skipped.ImportingFile.Length == 0 ? resolver.ProjectPath : skipped.ImportingFile;
+            if (!resolver.IsRepositoryFile(importingFile))
             {
                 continue;
             }
@@ -72,15 +72,15 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     /// Conditions on <c>$(IsTestProject)</c> inside early-evaluated <c>.props</c> files are unreliable: they run
     /// before the project body and before package-contributed props can set the property.
     /// </summary>
-    public void AddEarlyIsTestProjectBlockers(Project project, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
+    public void AddEarlyIsTestProjectBlockers(Project project, ProvenanceResolver resolver, string displayPath, List<InventoryBlocker> blockers)
     {
         EvaluationOrder order = new(project);
-        int? firstDefinition = EarliestRepositoryDefinition(project.GetProperty("IsTestProject"), context, order);
+        int? firstDefinition = EarliestRepositoryDefinition(project.GetProperty("IsTestProject"), resolver, order);
 
         foreach (ResolvedImport import in project.Imports)
         {
             string file = import.ImportedProject.FullPath;
-            if (!context.IsRepositoryFile(file) || !file.EndsWith(".props", StringComparison.OrdinalIgnoreCase))
+            if (!resolver.IsRepositoryFile(file) || !file.EndsWith(".props", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -98,18 +98,18 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                         BlockerCodes.IsTestProjectEarlyCondition, BlockerSeverity.Warning,
                         $"'{formatter.Format(file)}' conditions on $(IsTestProject) before anything in the repository has reliably set it, so the condition may not see the final value.",
                         "Move this logic to Directory.Build.targets, import the file after IsTestProject is assigned, or detect test projects from package references instead of IsTestProject.",
-                        displayPath, context.LocationOf(element)));
+                        displayPath, resolver.LocationOf(element)));
                 }
             }
         }
     }
 
-    private static int? EarliestRepositoryDefinition(ProjectProperty? property, EvaluationContext context, EvaluationOrder order)
+    private static int? EarliestRepositoryDefinition(ProjectProperty? property, ProvenanceResolver resolver, EvaluationOrder order)
     {
         int? earliest = null;
         for (ProjectProperty? definition = property; definition is not null; definition = definition.Predecessor)
         {
-            if (definition.Xml is { } xml && context.IsRepositoryFile(xml.Location.File) && order.IndexOf(xml) is { } index)
+            if (definition.Xml is { } xml && resolver.IsRepositoryFile(xml.Location.File) && order.IndexOf(xml) is { } index)
             {
                 earliest = Math.Min(earliest ?? index, index);
             }
@@ -125,22 +125,22 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     /// MSBuild evaluates all properties before any item, so item conditions see final property state, but property and
     /// import conditions only see properties defined earlier in evaluation order.
     /// </summary>
-    public static void AddConditionBlockers(Project project, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
+    public static void AddConditionBlockers(Project project, ProvenanceResolver resolver, string displayPath, List<InventoryBlocker> blockers)
     {
         EvaluationOrder order = new(project);
         IEnumerable<ProjectRootElement> roots = [project.Xml, .. project.Imports.Select(i => i.ImportedProject)];
         foreach (ProjectRootElement root in roots.DistinctBy(r => r.FullPath, PathComparison.Comparer))
         {
-            if (!context.IsRepositoryFile(root.FullPath))
+            if (!resolver.IsRepositoryFile(root.FullPath))
             {
                 continue;
             }
 
             foreach (ProjectElement element in root.AllChildren.Where(IsRelevantElement))
             {
-                SourceLocation location = context.LocationOf(element);
+                SourceLocation location = resolver.LocationOf(element);
                 int? evaluatedAt = element is ProjectItemElement ? null : order.IndexOf(element);
-                foreach (string condition in EvaluationContext.Conditions(element))
+                foreach (string condition in ProvenanceResolver.Conditions(element))
                 {
                     AddConditionBlockers(project, condition, location, evaluatedAt, order, displayPath, blockers);
                 }

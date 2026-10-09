@@ -1,6 +1,7 @@
 using Microsoft.Build.Construction;
 using Microsoft.Build.Definition;
 using Microsoft.Build.Evaluation;
+using Microsoft.Build.Evaluation.Context;
 using Microsoft.Build.Exceptions;
 
 namespace VsTestToMtp.Inventory;
@@ -32,8 +33,8 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
 
     // Documented for evaluating several projects: one context extends the lifetime of evaluation caches (file system, SDK
     // resolution). It is created per inventory run and thrown away afterwards, as the docs require when the environment may change.
-    private readonly Microsoft.Build.Evaluation.Context.EvaluationContext _msBuildContext =
-        Microsoft.Build.Evaluation.Context.EvaluationContext.Create(Microsoft.Build.Evaluation.Context.EvaluationContext.SharingPolicy.Shared);
+    private readonly EvaluationContext _msBuildContext =
+        EvaluationContext.Create(EvaluationContext.SharingPolicy.Shared);
 
     private readonly Dictionary<string, string> _globalProperties = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -51,7 +52,8 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         List<InventoryBlocker> blockers = [];
         ImportLogger logger = new();
 
-        using ProjectCollection collection = new(_globalProperties, [logger], ToolsetDefinitionLocations.Default);
+        // Global properties are passed once, on each load (ProjectOptions), not also on the collection.
+        using ProjectCollection collection = new(globalProperties: null, [logger], ToolsetDefinitionLocations.Default);
 
         Project? outer = Load(collection, projectPath, null, displayPath, blockers);
         if (outer is null)
@@ -59,9 +61,9 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             return new EvaluatedProject(displayPath, [], [], Sorted(blockers));
         }
 
-        // Every evaluation gets its own context: an import conditioned on $(TargetFramework) only exists in the inner build.
-        EvaluationContext outerContext = new(outer, projectPath, formatter);
-        List<(Project Project, EvaluationContext Context)> evaluated = [(outer, outerContext)];
+        // Every evaluation gets its own resolver: an import conditioned on $(TargetFramework) only exists in the inner build.
+        ProvenanceResolver outerResolver = new(outer, projectPath, formatter);
+        List<(Project Project, ProvenanceResolver Resolver)> evaluated = [(outer, outerResolver)];
 
         // Same rule as the SDK: a project only dispatches to inner builds when TargetFrameworks is set and TargetFramework is empty.
         // Like Roslyn, NuGet and `dotnet new`, each inner build is then a re-evaluation with TargetFramework as a global property.
@@ -78,7 +80,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
                 $"'{displayPath}' does not evaluate to a TargetFramework or TargetFrameworks value.",
                 "Set TargetFramework (or TargetFrameworks) in the project, Directory.Build.props or an SDK-style import, then rerun.",
                 displayPath, formatter.Location(projectPath)));
-            frameworks.Add(Capture(outer, string.Empty, outerContext, displayPath, blockers));
+            frameworks.Add(Capture(outer, string.Empty, outerResolver, displayPath, blockers));
         }
         else
         {
@@ -93,20 +95,20 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
                     continue;
                 }
 
-                EvaluationContext context = outerIsThisFramework ? outerContext : new EvaluationContext(project, projectPath, formatter);
+                ProvenanceResolver resolver = outerIsThisFramework ? outerResolver : new ProvenanceResolver(project, projectPath, formatter);
                 if (!outerIsThisFramework)
                 {
-                    evaluated.Add((project, context));
+                    evaluated.Add((project, resolver));
                 }
 
-                frameworks.Add(Capture(project, targetFramework, context, displayPath, blockers));
+                frameworks.Add(Capture(project, targetFramework, resolver, displayPath, blockers));
             }
         }
 
-        _blockerDetector.AddImportBlockers(logger, outerContext, displayPath, blockers);
-        foreach ((Project project, EvaluationContext context) in evaluated)
+        _blockerDetector.AddImportBlockers(logger, outerResolver, displayPath, blockers);
+        foreach ((Project project, ProvenanceResolver resolver) in evaluated)
         {
-            _blockerDetector.AddEarlyIsTestProjectBlockers(project, context, displayPath, blockers);
+            _blockerDetector.AddEarlyIsTestProjectBlockers(project, resolver, displayPath, blockers);
         }
 
         return new EvaluatedProject(displayPath, frameworks, CaptureImports(evaluated), Sorted(blockers));
@@ -157,7 +159,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         }
     }
 
-    private EvaluatedTargetFramework Capture(Project project, string targetFramework, EvaluationContext context, string displayPath, List<InventoryBlocker> blockers)
+    private EvaluatedTargetFramework Capture(Project project, string targetFramework, ProvenanceResolver resolver, string displayPath, List<InventoryBlocker> blockers)
     {
         List<PropertyState> properties = [];
         foreach (string name in RelevantProperties)
@@ -168,7 +170,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
                 continue;
             }
 
-            properties.Add(CaptureProperty(property, name, context));
+            properties.Add(CaptureProperty(property, name, resolver));
         }
 
         // A PackageVersion only supplies versions when Central Package Management is on; NuGet ignores it otherwise.
@@ -190,7 +192,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
                 }
 
                 // NuGet reports NU1506 here because restore is inconsistent; do not pick a winner.
-                Provenance[] definitions = [.. group.Select(v => context.Provenance(v.Xml))];
+                Provenance[] definitions = [.. group.Select(v => resolver.Provenance(v.Xml))];
                 blockers.Add(new InventoryBlocker(
                     BlockerCodes.DuplicatePackageVersion, BlockerSeverity.Warning,
                     $"PackageVersion '{group.Key}' is declared {definitions.Length} times ({string.Join(", ", definitions.Select(d => d.Location))}), so its central version is ambiguous.",
@@ -204,7 +206,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         {
             foreach (ProjectItem item in project.GetItems(itemType))
             {
-                packages.Add(CapturePackage(project, item, itemType == "GlobalPackageReference", central, centralManagement, overrideAllowed, context, displayPath, blockers));
+                packages.Add(CapturePackage(project, item, itemType == "GlobalPackageReference", central, centralManagement, overrideAllowed, resolver, displayPath, blockers));
             }
         }
 
@@ -219,12 +221,12 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             .ThenBy(p => p.Definition.Location.File, StringComparer.Ordinal)
             .ThenBy(p => p.Definition.Location.Line)];
 
-        ProjectBlockerDetector.AddConditionBlockers(project, context, displayPath, blockers);
+        ProjectBlockerDetector.AddConditionBlockers(project, resolver, displayPath, blockers);
 
-        return new EvaluatedTargetFramework(targetFramework, properties, packages, CaptureProjectReferences(project, context));
+        return new EvaluatedTargetFramework(targetFramework, properties, packages, CaptureProjectReferences(project, resolver));
     }
 
-    private List<ProjectReferenceState> CaptureProjectReferences(Project project, EvaluationContext context)
+    private List<ProjectReferenceState> CaptureProjectReferences(Project project, ProvenanceResolver resolver)
     {
         List<ProjectReferenceState> references = [];
         foreach (ProjectItem item in project.GetItems("ProjectReference"))
@@ -235,7 +237,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             }
 
             string full = Path.GetFullPath(item.GetMetadataValue("FullPath"));
-            references.Add(new ProjectReferenceState(formatter.Format(full), selectedProjects.Contains(full), context.Provenance(item.Xml)));
+            references.Add(new ProjectReferenceState(formatter.Format(full), selectedProjects.Contains(full), resolver.Provenance(item.Xml)));
         }
 
         return [.. references
@@ -245,7 +247,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             .ThenBy(r => r.Definition.Location.Line)];
     }
 
-    private static PropertyState CaptureProperty(ProjectProperty property, string name, EvaluationContext context)
+    private static PropertyState CaptureProperty(ProjectProperty property, string name, ProvenanceResolver resolver)
     {
         PropertySource source = property.IsGlobalProperty ? PropertySource.Global
             : property.IsEnvironmentProperty ? PropertySource.Environment
@@ -256,12 +258,12 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         List<Provenance> overridden = [];
         if (source == PropertySource.File && property.Xml is not null)
         {
-            definition = context.Provenance(property.Xml);
+            definition = resolver.Provenance(property.Xml);
             for (ProjectProperty? earlier = property.Predecessor; earlier is not null; earlier = earlier.Predecessor)
             {
                 if (earlier.Xml is not null)
                 {
-                    overridden.Insert(0, context.Provenance(earlier.Xml));
+                    overridden.Insert(0, resolver.Provenance(earlier.Xml));
                 }
             }
         }
@@ -277,18 +279,18 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         Dictionary<string, ProjectItem> central,
         bool centralManagement,
         bool overrideAllowed,
-        EvaluationContext context,
+        ProvenanceResolver resolver,
         string displayPath,
         List<InventoryBlocker> blockers)
     {
-        Provenance definition = context.Provenance(item.Xml);
+        Provenance definition = resolver.Provenance(item.Xml);
         List<Provenance> modifiers = [];
         try
         {
             bool foundInclude = false;
             foreach (ProvenanceResult result in project.GetItemProvenance(item))
             {
-                Provenance provenance = context.Provenance(result.ItemElement);
+                Provenance provenance = resolver.Provenance(result.ItemElement);
                 if (result.Operation == Operation.Include && !foundInclude)
                 {
                     foundInclude = true;
@@ -328,7 +330,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         }
         else if (inline.Length > 0)
         {
-            (version, versionSource, versionDefinition) = (inline, PackageVersionSource.Inline, MetadataProvenance(item, "Version", context, definition));
+            (version, versionSource, versionDefinition) = (inline, PackageVersionSource.Inline, MetadataProvenance(item, "Version", resolver, definition));
         }
         else if (versionOverride.Length > 0 && centralManagement && !overrideAllowed)
         {
@@ -338,11 +340,11 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         }
         else if (versionOverride.Length > 0 && overrideAllowed)
         {
-            (version, versionSource, versionDefinition) = (versionOverride, PackageVersionSource.VersionOverride, MetadataProvenance(item, "VersionOverride", context, definition));
+            (version, versionSource, versionDefinition) = (versionOverride, PackageVersionSource.VersionOverride, MetadataProvenance(item, "VersionOverride", resolver, definition));
         }
         else if (central.TryGetValue(name, out ProjectItem? centralItem) && centralItem.GetMetadataValue("Version") is { Length: > 0 } centralVersion)
         {
-            (version, versionSource, versionDefinition) = (centralVersion, PackageVersionSource.Central, MetadataProvenance(centralItem, "Version", context, context.Provenance(centralItem.Xml)));
+            (version, versionSource, versionDefinition) = (centralVersion, PackageVersionSource.Central, MetadataProvenance(centralItem, "Version", resolver, resolver.Provenance(centralItem.Xml)));
         }
         else
         {
@@ -388,31 +390,31 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
     /// Where the winning value of an item's metadata was declared: the Include, a later Update, or an item definition.
     /// Falls back to <paramref name="fallback"/> when MSBuild does not expose the declaring element.
     /// </summary>
-    private static Provenance MetadataProvenance(ProjectItem item, string metadataName, EvaluationContext context, Provenance fallback) =>
-        item.GetMetadata(metadataName)?.Xml is { } xml ? context.Provenance(xml) : fallback;
+    private static Provenance MetadataProvenance(ProjectItem item, string metadataName, ProvenanceResolver resolver, Provenance fallback) =>
+        item.GetMetadata(metadataName)?.Xml is { } xml ? resolver.Provenance(xml) : fallback;
 
-    private List<ImportRecord> CaptureImports(IEnumerable<(Project Project, EvaluationContext Context)> evaluated)
+    private List<ImportRecord> CaptureImports(IEnumerable<(Project Project, ProvenanceResolver Resolver)> evaluated)
     {
         List<ImportRecord> imports = [];
-        foreach ((Project project, EvaluationContext context) in evaluated)
+        foreach ((Project project, ProvenanceResolver resolver) in evaluated)
         {
             foreach (ResolvedImport import in project.Imports)
             {
                 string file = import.ImportedProject.FullPath;
-                if (!context.IsRepositoryFile(file) || import.ImportingElement is null)
+                if (!resolver.IsRepositoryFile(file) || import.ImportingElement is null)
                 {
                     continue;
                 }
 
                 ProjectImportElement element = import.ImportingElement;
-                bool isImplicit = !string.IsNullOrEmpty(element.Sdk) || !context.IsRepositoryFile(element.ContainingProject.FullPath);
+                bool isImplicit = !string.IsNullOrEmpty(element.Sdk) || !resolver.IsRepositoryFile(element.ContainingProject.FullPath);
                 ImportRecord record = new(
                     formatter.Format(file),
                     KindOf(file),
                     isImplicit,
                     IsRepositoryFile: true,
-                    context.LocationOf(element),
-                    EvaluationContext.JoinConditions(element));
+                    resolver.LocationOf(element),
+                    ProvenanceResolver.JoinConditions(element));
                 if (!imports.Contains(record))
                 {
                     imports.Add(record);

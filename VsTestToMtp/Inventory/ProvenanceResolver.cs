@@ -4,13 +4,13 @@ using Microsoft.Build.Evaluation;
 namespace VsTestToMtp.Inventory;
 
 /// <summary>Per-project helpers for turning MSBuild elements into <see cref="Provenance"/>.</summary>
-internal sealed class EvaluationContext
+internal sealed class ProvenanceResolver
 {
     private readonly Dictionary<string, ResolvedImport> _importsByFile = new(PathComparison.Comparer);
     private readonly PathFormatter _formatter;
     private readonly string[] _externalRoots;
 
-    public EvaluationContext(Project project, string projectPath, PathFormatter formatter)
+    public ProvenanceResolver(Project project, string projectPath, PathFormatter formatter)
     {
         ProjectPath = projectPath;
         _formatter = formatter;
