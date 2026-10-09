@@ -288,6 +288,28 @@ public class InventoryScenarioTests
     }
 
     [Test]
+    public async Task TargetFrameworkSetAlongsideTargetFrameworks_IsASingleTargetBuild()
+    {
+        // The SDK only dispatches to inner builds when TargetFramework is empty, so this project builds (and tests) net10.0 alone.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                """
+                  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+                    <PackageReference Include="NUnit" Version="4.3.2" />
+                    <PackageReference Include="NUnit3TestAdapter" Version="5.0.0" />
+                  </ItemGroup>
+                """,
+                "<TargetFramework>net10.0</TargetFramework>\n    <TargetFrameworks>net10.0;net8.0</TargetFrameworks>");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.TargetFrameworks.Select(t => t.TargetFramework)).IsEquivalentTo(["net10.0"]);
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Production);
+        await Assert.That(project.Blockers).IsEmpty();
+    }
+
+    [Test]
     public async Task ExplicitParentImports_AreRecordedInTheImportChain()
     {
         const string importParent = "<Import Project=\"$([MSBuild]::GetPathOfFileAbove('{0}', '$(MSBuildThisFileDirectory)../'))\" />";

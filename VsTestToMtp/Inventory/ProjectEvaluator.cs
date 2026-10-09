@@ -63,12 +63,12 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         EvaluationContext outerContext = new(outer, projectPath, formatter);
         List<(Project Project, EvaluationContext Context)> evaluated = [(outer, outerContext)];
 
-        string[] targetFrameworks = SplitFrameworks(outer.GetPropertyValue("TargetFrameworks"));
-        if (targetFrameworks.Length == 0)
-        {
-            string single = outer.GetPropertyValue("TargetFramework").Trim();
-            targetFrameworks = single.Length == 0 ? [] : [single];
-        }
+        // Same rule as the SDK: a project only dispatches to inner builds when TargetFrameworks is set and TargetFramework is empty.
+        // Like Roslyn, NuGet and `dotnet new`, each inner build is then a re-evaluation with TargetFramework as a global property.
+        // https://github.com/dotnet/sdk/blob/78c57f0692e746e84becc60c287634326d6a96db/src/Tasks/Microsoft.NET.Build.Tasks/sdk/Sdk.targets#L16-L18
+        // https://github.com/dotnet/roslyn/blob/33c9ed52c54827abaff4d4a2fb1f45efd7e5ac99/src/Workspaces/MSBuild/BuildHost/Build/ProjectBuildManager.cs#L266-L305
+        string single = outer.GetPropertyValue("TargetFramework").Trim();
+        string[] targetFrameworks = single.Length > 0 ? [single] : SplitFrameworks(outer.GetPropertyValue("TargetFrameworks"));
 
         List<EvaluatedTargetFramework> frameworks = [];
         if (targetFrameworks.Length == 0)
