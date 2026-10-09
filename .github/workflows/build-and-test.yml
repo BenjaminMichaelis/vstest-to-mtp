@@ -34,8 +34,17 @@ jobs:
         with:
             use-github-auto-merge: true
 
+  # The tool inspects real MSBuild state, file systems and SDK installs, all of which differ by OS
+  # (path casing, ACLs, SDK discovery), so build and test on every supported OS.
   build-and-test:
-    runs-on: ubuntu-latest
+    name: build-and-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # Let every OS finish so a single failure shows which platforms are affected.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - name: Checkout
@@ -52,7 +61,9 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore
 
+      # Formatting is OS independent, and .editorconfig requires LF, which a Windows checkout (CRLF) would not satisfy.
       - name: Enforce formatting
+        if: runner.os == 'Linux'
         run: |
           .\.github\scripts\Invoke-DotNetFormatStrict.ps1 -DiscoverFromCurrentDirectory
 
@@ -98,6 +109,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: failed-tests-playlist
+          name: failed-tests-playlist-${{ matrix.os }}
           path: test-results/failed-tests.playlist
           if-no-files-found: ignore

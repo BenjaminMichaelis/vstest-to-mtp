@@ -28,12 +28,15 @@
     MODE 1 (default): CoreCLR self-contained — simplest setup.
     A single `dotnet pack` produces one self-contained package per RID plus a pointer package.
     `any` provides a portable CoreCLR fallback for platforms not listed (e.g. win-arm64, osx-x64).
-    Optionally add <PublishTrimmed>true</PublishTrimmed> to reduce size after validating trim safety.
-    See: https://learn.microsoft.com/dotnet/core/deploying/trimming/trimming-options
+    Do not enable PublishTrimmed: the inventory loads the .NET SDK's MSBuild at runtime (MSBuildLocator), and trimming removes framework
+    code those assemblies need. Self-contained is fine; MSBuildLocator supports it (https://github.com/microsoft/MSBuildLocator/issues/320).
     -->
     <RuntimeIdentifiers>win-x64;linux-x64;osx-arm64;any</RuntimeIdentifiers>
 
     <!--
+    MODES 2 and 3 below are not usable while the tool loads the SDK's MSBuild at runtime (the inventory does): a Native AOT
+    executable cannot load managed MSBuild assemblies.
+
     MODE 2: Native AOT — fastest startup and smallest memory footprint.
     Replace RuntimeIdentifiers above with ToolPackageRuntimeIdentifiers and enable PublishAot.
     IMPORTANT: AOT compilation requires the build OS to match the target RID's OS — you must run
@@ -67,6 +70,10 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <!-- MSBuild assemblies are loaded from the located .NET SDK at runtime (MSBuildLocator), so they must not be shipped. -->
+    <PackageReference Include="Microsoft.Build" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Locator" />
+    <PackageReference Include="Microsoft.VisualStudio.SolutionPersistence" />
     <PackageReference Include="System.CommandLine" />
   </ItemGroup>
 

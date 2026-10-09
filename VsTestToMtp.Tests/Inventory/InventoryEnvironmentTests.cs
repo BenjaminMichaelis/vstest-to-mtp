@@ -1,0 +1,289 @@
+namespace VsTestToMtp.Tests.Inventory;
+
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
+
+using Microsoft.Build.Locator;
+
+using VsTestToMtp.Inventory;
+
+// MSBuild evaluation blocks threads; running many evaluations in parallel starves the thread pool and is far slower than serial.
+[NotInParallel("MSBuildEvaluation")]
+public class InventoryEnvironmentTests
+{
+    [Test]
+    public async Task UnsatisfiableGlobalJson_IsReportedAsMsBuildNotFound_AndDoesNotPoisonLaterSelections()
+    {
+        using ScenarioWorkspace broken = new ScenarioWorkspace()
+            .Write("global.json", "{ \"sdk\": { \"version\": \"99.0.100\", \"rollForward\": \"disable\" } }")
+            .WriteProject("App/App.csproj");
+        using ScenarioWorkspace healthy = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj");
+
+        ProjectInventory failed = broken.Inventory("App/App.csproj").Projects.Single();
+        ProjectInventory ok = healthy.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(failed.Classification).IsEqualTo(ProjectClassification.Unknown);
+        await Assert.That(failed.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MsBuildNotFound]);
+        await Assert.That(ok.Classification).IsEqualTo(ProjectClassification.Production);
+        await Assert.That(ok.Blockers).IsEmpty();
+    }
+
+    [Test]
+    public async Task SelectionPinnedToADifferentSdkThanTheLoadedOne_IsReportedAsMismatch()
+    {
+        // Every workspace pins the fixtures' SDK, so evaluating one first registers that SDK (or confirms it is already registered).
+        using ScenarioWorkspace pinnedLikeTheFixtures = new ScenarioWorkspace().WriteProject("App/App.csproj");
+        ProjectInventory evaluated = pinnedLikeTheFixtures.Inventory("App/App.csproj").Projects.Single();
+        await Assert.That(evaluated.Blockers).IsEmpty();
+
+        string registered = InstancesFor(pinnedLikeTheFixtures.RootPath).First().MSBuildPath;
+        VisualStudioInstance? other = InstancesFor(pinnedLikeTheFixtures.RootPath)
+            .FirstOrDefault(i => i.MSBuildPath != registered && i.Version.Major >= MinimumSdkMajorVersion && !IsNewerThanRuntime(i.Version));
+        if (other is null)
+        {
+            Skip.Test("Needs a second installed .NET SDK (8.0 or newer, no newer than the test runtime).");
+            return;
+        }
+
+        using ScenarioWorkspace pinnedElsewhere = new ScenarioWorkspace()
+            .Write("global.json", Pin(other.Version))
+            .WriteProject("App/App.csproj");
+        ProjectInventory refused = pinnedElsewhere.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(refused.Classification).IsEqualTo(ProjectClassification.Unknown);
+        InventoryBlocker blocker = refused.Blockers.Single();
+        await Assert.That(blocker.Code).IsEqualTo(BlockerCodes.MsBuildSdkMismatch);
+        await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+    }
+
+    [Test]
+    public async Task SelectionPinnedToAnSdkNewerThanTheRuntime_IsRefused_NotEvaluatedWithAnotherSdk()
+    {
+        // MSBuildLocator hides such SDKs by default, which used to make a different SDK come first without any error.
+        VisualStudioInstance? newer = InstancesFor(Environment.CurrentDirectory).FirstOrDefault(i => IsNewerThanRuntime(i.Version));
+        if (newer is null)
+        {
+            Skip.Test($"Needs an installed .NET SDK newer than the {Environment.Version.Major}.{Environment.Version.Minor} test runtime.");
+            return;
+        }
+
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("global.json", Pin(newer.Version))
+            .WriteProject("App/App.csproj");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MsBuildSdkNewerThanRuntime]);
+    }
+
+    private const int MinimumSdkMajorVersion = 8;
+
+    private static string Pin(Version sdk) => $"{{ \"sdk\": {{ \"version\": \"{sdk}\", \"rollForward\": \"disable\" }} }}";
+
+    // Same rule MSBuildLocator applies by default: an SDK's MSBuild needs at least the runtime it shipped with.
+    private static bool IsNewerThanRuntime(Version sdk) =>
+        sdk.Major > Environment.Version.Major || (sdk.Major == Environment.Version.Major && sdk.Minor > Environment.Version.Minor);
+
+    private static VisualStudioInstance[] InstancesFor(string workingDirectory) =>
+    [
+        .. MSBuildLocator.QueryVisualStudioInstances(new VisualStudioInstanceQueryOptions
+        {
+            DiscoveryTypes = DiscoveryType.DotNetSdk,
+            WorkingDirectory = workingDirectory,
+            AllowAllRuntimeVersions = true,
+        }),
+    ];
+
+    [Test]
+    [SkipUnlessReadDenialSupported]
+    public async Task UnreadableDirectory_IsReportedAsBlocker_AndRestOfInventoryIsKept()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj")
+            .Write("scripts/build.ps1", "dotnet build")
+            .Write("locked/inner.ps1", "dotnet test");
+        string locked = workspace.PathOf("locked");
+
+        using (Lock(locked))
+        {
+            InventoryResult result = workspace.Inventory("App/App.csproj");
+
+            await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.Production);
+            await Assert.That(result.Automation.Select(a => a.Path)).IsEquivalentTo(["scripts/build.ps1"]);
+            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCodes.UnreadableDirectory);
+            await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Warning);
+            await Assert.That(blocker.Location!.File).IsEqualTo("locked");
+            await Assert.That(blocker.Remediation).IsNotEmpty();
+        }
+    }
+
+    [Test]
+    public async Task SdkOlderThanTheSupportedFloor_IsRejected_WithoutLoadingItsMsBuild()
+    {
+        // 8.0 is the oldest SDK whose MSBuild we support (we compile against Microsoft.Build 17.8).
+        VisualStudioInstance[] sdks = [.. MSBuildLocator.QueryVisualStudioInstances(
+            new VisualStudioInstanceQueryOptions { DiscoveryTypes = DiscoveryType.DotNetSdk })];
+        VisualStudioInstance? tooOld = sdks.OrderBy(i => i.Version).FirstOrDefault(i => i.Version.Major < 8);
+        if (tooOld is null)
+        {
+            Skip.Test("Needs an installed .NET SDK older than 8.0.");
+            return;
+        }
+
+        using ScenarioWorkspace old = new ScenarioWorkspace()
+            .Write("global.json", $"{{ \"sdk\": {{ \"version\": \"{tooOld.Version}\", \"rollForward\": \"disable\" }} }}")
+            .WriteProject("App/App.csproj");
+        using ScenarioWorkspace current = new ScenarioWorkspace().WriteProject("App/App.csproj");
+
+        ProjectInventory rejected = old.Inventory("App/App.csproj").Projects.Single();
+        ProjectInventory ok = current.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(rejected.Classification).IsEqualTo(ProjectClassification.Unknown);
+        await Assert.That(rejected.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MsBuildSdkUnsupported]);
+        // Rejecting it must not have registered (and so poisoned) MSBuild for later selections.
+        await Assert.That(ok.Blockers).IsEmpty();
+    }
+
+    [Test]
+    [SkipUnlessReadDenialSupported]
+    public async Task UnreadableSelectedDirectory_IsReportedAsBlocker_InsteadOfThrowing()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("sub/App/App.csproj");
+
+        using (Lock(workspace.PathOf("sub")))
+        {
+            InventoryResult result = InventoryBuilder.Build(workspace.PathOf("sub"), new InventoryOptions(workspace.RootPath));
+
+            await Assert.That(result.Projects).IsEmpty();
+            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCodes.UnreadableDirectory && b.Severity == BlockerSeverity.Error);
+            await Assert.That(blocker.Location!.File).IsEqualTo("sub");
+            await Assert.That(blocker.Remediation).IsNotEmpty();
+        }
+    }
+
+    [Test]
+    [SkipUnlessReadDenialSupported]
+    public async Task UnreadableProjectFile_IsReportedAsBlocker_InsteadOfThrowing()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj");
+
+        using (Lock(workspace.PathOf("App/App.csproj")))
+        {
+            ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+            await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+            InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.EvaluationFailed);
+            await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+            await Assert.That(blocker.Location!.File).IsEqualTo("App/App.csproj");
+        }
+    }
+
+    [Test]
+    [SkipUnlessReadDenialSupported]
+    public async Task UnreadableSolutionFile_IsReportedAsBlocker_InsteadOfThrowing()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj")
+            .WriteSlnx("All.slnx", "App/App.csproj");
+
+        using (Lock(workspace.PathOf("All.slnx")))
+        {
+            InventoryResult result = workspace.Inventory("All.slnx");
+
+            await Assert.That(result.Projects).IsEmpty();
+            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCodes.MalformedSolution);
+            await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+            await Assert.That(blocker.Location!.File).IsEqualTo("All.slnx");
+        }
+    }
+
+    [Test]
+    [SkipUnlessReadDenialSupported]
+    public async Task UnreadableGlobalJson_IsReportedAsBlocker_InsteadOfThrowing()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("global.json", "{ \"sdk\": { \"version\": \"10.0.100\" } }")
+            .WriteProject("App/App.csproj");
+
+        using (Lock(workspace.PathOf("global.json")))
+        {
+            InventoryResult result = workspace.Inventory("App/App.csproj");
+
+            await Assert.That(result.GlobalJson).IsNull();
+            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCodes.UnreadableGlobalJson);
+            await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+            await Assert.That(blocker.Location!.File).IsEqualTo("global.json");
+        }
+    }
+
+    [Test]
+    [SkipOnCaseInsensitivePaths]
+    public async Task ProjectReference_DifferingOnlyByCase_IsNotInSelectionOnCaseSensitiveFileSystems()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("A/A.csproj")
+            .WriteProject("a/a.csproj")
+            .WriteProject("App/App.csproj", "  <ItemGroup>\n    <ProjectReference Include=\"../a/a.csproj\" />\n  </ItemGroup>")
+            .WriteSlnx("All.slnx", "App/App.csproj", "A/A.csproj");
+
+        ProjectInventory app = workspace.Inventory("All.slnx").Projects.Single(p => p.Name == "App");
+
+        ProjectReferenceState reference = app.TargetFrameworks.Single().ProjectReferences.Single();
+        await Assert.That(reference.Path).IsEqualTo("a/a.csproj");
+        await Assert.That(reference.IsInSelection).IsFalse();
+    }
+
+    // Denies reading the file or listing the directory for the current user (ACL on Windows, mode bits elsewhere) until disposed.
+    private static Restore Lock(string path) =>
+        OperatingSystem.IsWindows() ? LockWithAcl(path) : LockWithMode(path);
+
+    [SupportedOSPlatform("windows")]
+    private static Restore LockWithAcl(string path)
+    {
+        SecurityIdentifier me = WindowsIdentity.GetCurrent().User!;
+        FileSystemAccessRule deny = new(me, FileSystemRights.ListDirectory | FileSystemRights.ReadData, AccessControlType.Deny);
+
+        if (Directory.Exists(path))
+        {
+            DirectoryInfo directory = new(path);
+            DirectorySecurity security = directory.GetAccessControl();
+            security.AddAccessRule(deny);
+            directory.SetAccessControl(security);
+            return new Restore(() =>
+            {
+                DirectorySecurity current = directory.GetAccessControl();
+                current.RemoveAccessRule(deny);
+                directory.SetAccessControl(current);
+            });
+        }
+
+        FileInfo file = new(path);
+        FileSecurity fileSecurity = file.GetAccessControl();
+        fileSecurity.AddAccessRule(deny);
+        file.SetAccessControl(fileSecurity);
+        return new Restore(() =>
+        {
+            FileSecurity current = file.GetAccessControl();
+            current.RemoveAccessRule(deny);
+            file.SetAccessControl(current);
+        });
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static Restore LockWithMode(string path)
+    {
+        UnixFileMode original = File.GetUnixFileMode(path);
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        return new Restore(() => File.SetUnixFileMode(path, original));
+    }
+
+    private sealed class Restore(Action undo) : IDisposable
+    {
+        public void Dispose() => undo();
+    }
+}
