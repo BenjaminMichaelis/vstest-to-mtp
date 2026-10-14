@@ -129,6 +129,7 @@ public class InventoryProvenanceTests
             await Assert.That(Path.GetFullPath(isPackable.Definition!.Location.File)).StartsWith(cache);
             await Assert.That(isPackable.Definition.IsRepositoryFile).IsFalse();
             await Assert.That(app.Imports.Select(i => i.File)).DoesNotContain(f => f.StartsWith(cache.Replace('\\', '/'), StringComparison.Ordinal));
+            await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
         }
         finally
         {
@@ -176,6 +177,86 @@ public class InventoryProvenanceTests
         }
     }
 
+    // EnableTUnitRunner is one of the properties the result exposes (and, unlike IsPackable, has no SDK default), and MSBuild captures the
+    // environment when evaluation starts, so this shows what NUGET_PACKAGES was while the project was evaluated.
+    private const string ShowNuGetPackages = "  <PropertyGroup>\n    <EnableTUnitRunner>$(NUGET_PACKAGES)</EnableTUnitRunner>\n  </PropertyGroup>";
+
+    private static string NuGetPackagesWhileEvaluating(ScenarioWorkspace workspace, InventoryOptions? options = null) =>
+        InventoryBuilder.Build(workspace.PathOf("App/App.csproj"), options ?? new InventoryOptions(workspace.RootPath))
+            .Projects.Single().TargetFrameworks.Single().GetProperty("EnableTUnitRunner")!.Value;
+
+    [Test]
+    [Arguments("NuGet.config")]
+    [Arguments("nuget.config")]
+    [Arguments("NuGet.Config")]
+    public async Task NuGetPackages_IsRedirectedToTheDefault_WhenANuGetConfigSetsGlobalPackagesFolder(string fileName)
+    {
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
+            return;
+        }
+
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write(fileName, LocalFeedNuGetConfig)
+            .WriteProject("App/App.csproj", ShowNuGetPackages);
+
+        string seen = NuGetPackagesWhileEvaluating(workspace);
+
+        await Assert.That(seen).IsEqualTo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages"));
+        await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
+    }
+
+    [Test]
+    public async Task NuGetPackages_IsNotTouched_WhenNoNuGetConfigSetsGlobalPackagesFolder()
+    {
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
+            return;
+        }
+
+        // A NuGet.config that only configures sources cannot move the packages folder, so the environment must stay untouched.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("NuGet.config", "<configuration>\n  <packageSources>\n    <clear />\n    <add key=\"local\" value=\"feed\" />\n  </packageSources>\n</configuration>")
+            .WriteProject("App/App.csproj", ShowNuGetPackages);
+
+        await Assert.That(NuGetPackagesWhileEvaluating(workspace)).IsEmpty();
+        await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
+    }
+
+    [Test]
+    public async Task NuGetPackages_IsNotTouched_WhenThereIsNoNuGetConfigAtAll()
+    {
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
+            return;
+        }
+
+        using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject("App/App.csproj", ShowNuGetPackages);
+
+        await Assert.That(NuGetPackagesWhileEvaluating(workspace)).IsEmpty();
+    }
+
+    [Test]
+    public async Task NuGetPackages_UsesAnExplicitDirectory_EvenWithoutANuGetConfig()
+    {
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
+            return;
+        }
+
+        string directory = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-explicit-packages");
+        using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject("App/App.csproj", ShowNuGetPackages);
+
+        string seen = NuGetPackagesWhileEvaluating(workspace, new InventoryOptions(workspace.RootPath, SdkPackagesDirectory: directory));
+
+        await Assert.That(seen).IsEqualTo(directory);
+        await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
+    }
+
     [Test]
     public async Task UnconditionalMissingImportInsideAVersionedSdk_IsReported_NotDroppedBecauseTheFileIsExternal()
     {
@@ -202,6 +283,7 @@ public class InventoryProvenanceTests
             await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
             await Assert.That(blocker.Message).Contains("does-not-exist.props");
             await Assert.That(app.Classification).IsEqualTo(ProjectClassification.Unknown);
+            await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
         }
         finally
         {

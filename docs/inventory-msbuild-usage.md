@@ -94,8 +94,9 @@ When adding a check, decide which of these it falls under; most review findings 
 
 - An SDK referenced with a version (`Sdk="MSTest.Sdk/3.6.4"`) is resolved by MSBuild's NuGet SDK resolver, which downloads a missing package
   into the NuGet global packages folder. A `NuGet.config` in the repository can put that folder inside the repository, which would make evaluation
-  write there, so evaluation runs with `NUGET_PACKAGES` pointed at `InventoryOptions.SdkPackagesDirectory` (default: NuGet's per-user packages
-  folder) unless `NUGET_PACKAGES` is already set, since that variable takes precedence over `NuGet.config` (`NuGetPackagesScope`). The trade-off:
+  write there, so when such a `NuGet.config` applies to a project (or the caller passes `InventoryOptions.SdkPackagesDirectory`) evaluation runs with
+  `NUGET_PACKAGES` pointed at that directory (default: NuGet's per-user packages folder) unless `NUGET_PACKAGES` is already set, since that
+  variable takes precedence over `NuGet.config` (`NuGetPackagesScope`). Without such a `NuGet.config` the environment is not touched at all. The trade-off:
   an SDK that is only present in a repository-local packages folder is fetched again into the redirected folder, which needs the package source
   to be reachable. A `NUGET_PACKAGES` that is already set (or an `InventoryOptions.SdkPackagesDirectory` the caller passes) is taken as the caller's
   explicit choice and is not second-guessed, so if it points inside the repository (for example a CI cache in the workspace) a versioned SDK that
@@ -105,7 +106,9 @@ When adding a check, decide which of these it falls under; most review findings 
   only off switch ([NuGetSdkResolver.cs](https://github.com/NuGet/NuGet.Client/blob/b337f5b80d3363a61f773f2e1c3757526a474610/src/NuGet.Core/Microsoft.Build.NuGetSdkResolver/NuGetSdkResolver.cs#L56-L60));
   with it set, such projects surface as `EvaluationFailed` blockers.
 
-- While it evaluates, the inventory sets the process-wide `NUGET_PACKAGES` environment variable (`NuGetPackagesScope`) and restores it afterwards.
+- In the two cases above (a repository `NuGet.config` that sets `globalPackagesFolder`, or a caller-supplied directory) the inventory sets the
+  process-wide `NUGET_PACKAGES` environment variable while it evaluates (`NuGetPackagesScope`) and restores it afterwards; otherwise it does not
+  touch the environment.
   Evaluations are serialized by a lock, but that lock cannot coordinate with unrelated NuGet or MSBuild work in the same process: a host running
   such work concurrently could inherit the temporary folder, or have its own change to the variable undone. Treat `InventoryBuilder` as not safe to
   run alongside other in-process NuGet/MSBuild work. Evaluating in a worker process (#26) would remove the problem.

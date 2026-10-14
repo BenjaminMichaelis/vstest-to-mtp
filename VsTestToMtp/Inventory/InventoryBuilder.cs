@@ -85,8 +85,9 @@ public static class InventoryBuilder
 
         lock (EvaluationLock)
         {
-            // Evaluation must not extract an SDK package into the repository; see NuGetPackagesScope.
-            using NuGetPackagesScope packages = NuGetPackagesScope.Redirect(options?.SdkPackagesDirectory);
+            // Evaluation must not extract an SDK package into the repository; see NuGetPackagesScope (it only touches the
+            // environment when a NuGet.config could redirect the packages folder, or the caller asked for a directory).
+            using NuGetPackagesScope packages = NuGetPackagesScope.Redirect(options?.SdkPackagesDirectory, selection.ProjectPaths);
             using ProjectEvaluator evaluator = new(formatter, selected);
             return
             [
