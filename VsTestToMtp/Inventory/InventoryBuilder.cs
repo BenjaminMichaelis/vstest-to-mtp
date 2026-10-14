@@ -64,7 +64,7 @@ public static class InventoryBuilder
             [
                 .. selection.ProjectPaths.Select(p => new ProjectInventory(
                     formatter.Format(p), Path.GetFileNameWithoutExtension(p), ProjectClassification.Unknown, false,
-                    [], [], [], [blocker])),
+                    [], [], [], [], [blocker])),
             ];
         }
 

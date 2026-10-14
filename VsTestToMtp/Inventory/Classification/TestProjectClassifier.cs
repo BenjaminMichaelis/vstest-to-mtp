@@ -12,7 +12,7 @@ internal static class TestProjectClassifier
         if (evaluated.HasErrors || evaluated.TargetFrameworks.Count == 0)
         {
             return new ProjectInventory(
-                evaluated.Path, name, ProjectClassification.Unknown, false, [],
+                evaluated.Path, name, ProjectClassification.Unknown, false, [], [],
                 [.. evaluated.TargetFrameworks.Select(tf => ToState(tf, ProjectClassification.Unknown, false, []))],
                 evaluated.Imports, BlockerOrdering.Normalize(blockers));
         }
@@ -39,18 +39,25 @@ internal static class TestProjectClassifier
                 evaluated.Path, null));
         }
 
-        string[] frameworks =
+        TestPackageInfo[] known =
         [
             .. evaluated.TargetFrameworks
                 .SelectMany(f => f.Packages)
-                .Select(p => TestPackageCatalog.TryGet(p.Name, out TestPackageRole role, out string framework) && role != TestPackageRole.Runner ? framework : null)
-                .OfType<string>()
-                .Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal),
+                .Select(p => TestPackageCatalog.TryGet(p.Name, out TestPackageInfo? info) ? info : null)
+                .OfType<TestPackageInfo>(),
         ];
 
+        // A framework comes from a framework package; a bare runner/adapter package only adapts one, so it does not count.
+        TestFramework[] frameworks = [.. known
+            .Where(i => i.Role != TestPackageRole.Runner)
+            .Select(i => i.Framework)
+            .OfType<TestFramework>()
+            .Distinct()
+            .Order()];
+        TestRunnerKind[] runners = [.. known.Select(i => i.Runner).OfType<TestRunnerKind>().Distinct().Order()];
+
         return new ProjectInventory(
-            evaluated.Path, name, overall, states.Any(s => s.HasTestLibraryDependency), frameworks,
+            evaluated.Path, name, overall, states.Any(s => s.HasTestLibraryDependency), frameworks, runners,
             states, evaluated.Imports, BlockerOrdering.Normalize(blockers));
     }
 
@@ -61,14 +68,14 @@ internal static class TestProjectClassifier
     {
         List<string> evidence = [];
 
-        PackageReferenceState[] testPackages = [.. framework.Packages.Where(p => TestPackageCatalog.TryGet(p.Name, out _, out _))];
+        PackageReferenceState[] testPackages = [.. framework.Packages.Where(p => TestPackageCatalog.TryGet(p.Name, out _))];
         foreach (PackageReferenceState package in testPackages)
         {
             evidence.Add($"package {package.Name} {package.Version ?? "(no version)"} at {package.Definition.Location}");
         }
 
         bool hasLibraryDependency = testPackages.Any(p =>
-            TestPackageCatalog.TryGet(p.Name, out TestPackageRole role, out _) && role != TestPackageRole.Runner);
+            TestPackageCatalog.TryGet(p.Name, out TestPackageInfo? info) && info.Role != TestPackageRole.Runner);
 
         PropertyState? isTestProject = framework.Properties.FirstOrDefault(p => string.Equals(p.Name, "IsTestProject", StringComparison.OrdinalIgnoreCase));
         if (isTestProject is { Value.Length: > 0 } && !MsBuildBoolean.TryParse(isTestProject.Value, out _))
@@ -114,8 +121,8 @@ internal static class TestProjectClassifier
     }
 
     private static bool Has(PackageReferenceState package, bool framework) =>
-        TestPackageCatalog.TryGet(package.Name, out TestPackageRole role, out _)
-        && (role == TestPackageRole.FrameworkAndRunner || role == (framework ? TestPackageRole.Framework : TestPackageRole.Runner));
+        TestPackageCatalog.TryGet(package.Name, out TestPackageInfo? info)
+        && (info.Role == TestPackageRole.FrameworkAndRunner || info.Role == (framework ? TestPackageRole.Framework : TestPackageRole.Runner));
 
     private static TargetFrameworkState ToState(
         EvaluatedTargetFramework framework,

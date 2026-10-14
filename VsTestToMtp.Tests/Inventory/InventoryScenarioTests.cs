@@ -174,7 +174,54 @@ public class InventoryScenarioTests
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Production);
         await Assert.That(project.HasTestLibraryDependency).IsTrue();
-        await Assert.That(project.Frameworks).IsEquivalentTo(["MSTest"]);
+        await Assert.That(project.Frameworks).IsEquivalentTo([TestFramework.MSTest]);
+        await Assert.That(project.Runners).IsEmpty();
+    }
+
+    [Test]
+    public async Task AdapterWithoutItsFramework_IsARunnerOnly_NotAFramework()
+    {
+        // NUnit3TestAdapter adapts NUnit for VSTest but is not NUnit itself, so it contributes a runner and no framework.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                ScenarioWorkspace.PackageReferences(new PackageRef("NUnit3TestAdapter", "5.0.0"), new PackageRef("Microsoft.NET.Test.Sdk", "18.0.0")));
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.Frameworks).IsEmpty();
+        await Assert.That(project.Runners).IsEquivalentTo([TestRunnerKind.VSTest]);
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Production);
+    }
+
+    [Test]
+    public async Task TUnit_IsATestApplicationOnMicrosoftTestingPlatform()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences(new PackageRef("TUnit", "1.0.0")));
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.TestApplication);
+        await Assert.That(project.Frameworks).IsEquivalentTo([TestFramework.TUnit]);
+        await Assert.That(project.Runners).IsEquivalentTo([TestRunnerKind.MicrosoftTestingPlatform]);
+    }
+
+    [Test]
+    public async Task RunnerPackagesOfBothPlatforms_AreAllReported_InEnumOrder()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                ScenarioWorkspace.PackageReferences(
+                    new PackageRef("Microsoft.Testing.Platform", "1.0.0"),
+                    new PackageRef("Microsoft.NET.Test.Sdk", "18.0.0"),
+                    new PackageRef("NUnit", "4.3.2")));
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.Frameworks).IsEquivalentTo([TestFramework.NUnit]);
+        await Assert.That(project.Runners).IsEquivalentTo([TestRunnerKind.VSTest, TestRunnerKind.MicrosoftTestingPlatform], CollectionOrdering.Matching);
     }
 
     [Test]

@@ -3,13 +3,18 @@ namespace VsTestToMtp.Inventory;
 /// <summary>A project in the selection with its evaluated, classified state.</summary>
 /// <param name="Path">Project file path (same formatting as <see cref="SourceLocation.File"/>).</param>
 /// <param name="TargetFrameworks">Evaluated target frameworks, ordinal order.</param>
-/// <param name="Frameworks">Test frameworks detected from package evidence (e.g. <c>MSTest</c>, <c>xUnit v3</c>).</param>
+/// <param name="Frameworks">Test frameworks detected from package evidence, in enum order.</param>
+/// <param name="Runners">
+/// Platforms the project's runner packages target (VSTest and/or Microsoft.Testing.Platform), in enum order. A bare framework
+/// package says nothing about the runner, so this can be empty even when <paramref name="Frameworks"/> is not.
+/// </param>
 public sealed record ProjectInventory(
     string Path,
     string Name,
     ProjectClassification Classification,
     bool HasTestLibraryDependency,
-    IReadOnlyList<string> Frameworks,
+    IReadOnlyList<TestFramework> Frameworks,
+    IReadOnlyList<TestRunnerKind> Runners,
     IReadOnlyList<TargetFrameworkState> TargetFrameworks,
     IReadOnlyList<ImportRecord> Imports,
     IReadOnlyList<InventoryBlocker> Blockers);

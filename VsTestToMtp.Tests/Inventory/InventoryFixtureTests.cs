@@ -48,16 +48,19 @@ public class InventoryFixtureTests
     {
         ProjectInventory tests = Inventory(fixture).Projects.Single(p => p.Path == TestProjectPath);
 
-        string expected = fixture.Framework switch
+        TestFramework expected = fixture.Framework switch
         {
-            "mstest" => "MSTest",
-            "nunit" => "NUnit",
-            "xunit-v3" => "xUnit v3",
-            "xunit-v2" => "xUnit v2",
+            "mstest" => TestFramework.MSTest,
+            "nunit" => TestFramework.NUnit,
+            "xunit-v3" => TestFramework.XUnitV3,
+            "xunit-v2" => TestFramework.XUnitV2,
             _ => throw new InvalidOperationException($"Unknown framework '{fixture.Framework}'."),
         };
 
         await Assert.That(tests.Frameworks).IsEquivalentTo([expected]);
+
+        // Every committed fixture runs on VSTest (xunit-v3 via xunit.v3.mtp-off), which is the baseline a converter starts from.
+        await Assert.That(tests.Runners).IsEquivalentTo([TestRunnerKind.VSTest]);
     }
 
     [Test]
