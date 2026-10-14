@@ -13,6 +13,7 @@ public enum BlockerCode
     MsBuildSdkMismatch,
     MsBuildSdkUnsupported,
     MsBuildSdkNewerThanRuntime,
+    MsBuildHostFailed,
     UnreadableDirectory,
     EvaluationFailed,
     MissingImport,

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>VsTestToMtp</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisMode>Recommended</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <Deterministic>true</Deterministic>
+    <IsPackable>false</IsPackable>
+    <!-- Referenced by the Native AOT CLI: the analyzers keep reflection out of the shared model and its JSON contract. -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="VsTestToMtp" />
+    <InternalsVisibleTo Include="vstest-to-mtp" />
+    <InternalsVisibleTo Include="vstest-to-mtp-msbuild-host" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+  Evaluates projects with the .NET SDK's MSBuild and reports the result as JSON. It is a separate process because the
+  vstest-to-mtp CLI is Native AOT, which cannot load managed MSBuild assemblies. It is never compiled with PublishAot.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>vstest-to-mtp-msbuild-host</AssemblyName>
+    <RootNamespace>VsTestToMtp</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisMode>Recommended</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <Deterministic>true</Deterministic>
+    <IsPackable>false</IsPackable>
+    <!-- Run on a newer machine runtime when one is installed: a newer SDK's MSBuild needs at least the runtime it shipped with. -->
+    <RollForward>LatestMajor</RollForward>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- MSBuild assemblies are loaded from the located .NET SDK at runtime (MSBuildLocator), so they must not be shipped. -->
+    <PackageReference Include="Microsoft.Build" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Locator" />
+    <ProjectReference Include="..\VsTestToMtp.Contracts\VsTestToMtp.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

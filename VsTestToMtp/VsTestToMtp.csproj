@@ -9,6 +9,10 @@
     (CA1707, hundreds of hits) and would drown the signal. The product has no diagnostics at this level today.
     -->
     <AnalysisMode>Recommended</AnalysisMode>
+    <!-- Trim/AOT/single-file analyzers: the CLI ships as Native AOT (see the packaging notes below), so reflection must stay out of it. -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- The MSBuild host is an executable that is deliberately not self-contained or AOT like this CLI; it is only a build-order reference. -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <Deterministic>true</Deterministic>
     <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
@@ -22,51 +26,34 @@
     <ToolCommandName>vstest-to-mtp</ToolCommandName>
 
     <!--
-    RID-specific tool packaging (choose one of the three modes below).
+    RID-specific tool packaging: Native AOT for the listed platforms with a portable CoreCLR fallback (`any`).
     The .NET CLI automatically selects the best package for each user's platform.
     See: https://learn.microsoft.com/en-us/dotnet/core/tools/rid-specific-tools
 
-    Note: NU5017 is a NuGet validation false positive on the pointer package — all packages are
-    created correctly. Track https://github.com/NuGet/NuGet.Client/issues for when this is fixed.
+    Build steps (AOT compilation needs the build OS to match the target RID's OS, so run each on its own OS in a CI matrix):
+      dotnet pack                  # pointer package (any platform)
+      dotnet pack -r win-x64       # Native AOT on Windows
+      dotnet pack -r linux-x64     # Native AOT on Linux
+      dotnet pack -r osx-arm64     # Native AOT on macOS arm64
+      dotnet pack -r any           # CoreCLR fallback (any platform)
+
+    Note: NU5017 is a NuGet validation false positive on the pointer package; all packages are created correctly.
     -->
-
-    <!--
-    MODE 1 (default): CoreCLR self-contained — simplest setup.
-    A single `dotnet pack` produces one self-contained package per RID plus a pointer package.
-    `any` provides a portable CoreCLR fallback for platforms not listed (e.g. win-arm64, osx-x64).
-    Do not enable PublishTrimmed: the inventory loads the .NET SDK's MSBuild at runtime (MSBuildLocator), and trimming removes framework
-    code those assemblies need. Self-contained is fine; MSBuildLocator supports it (https://github.com/microsoft/MSBuildLocator/issues/320).
-    -->
-    <RuntimeIdentifiers>win-x64;linux-x64;osx-arm64;any</RuntimeIdentifiers>
-
-    <!--
-    MODES 2 and 3 below are not usable while the tool loads the SDK's MSBuild at runtime (the inventory does): a Native AOT
-    executable cannot load managed MSBuild assemblies.
-
-    MODE 2: Native AOT — fastest startup and smallest memory footprint.
-    Replace RuntimeIdentifiers above with ToolPackageRuntimeIdentifiers and enable PublishAot.
-    IMPORTANT: AOT compilation requires the build OS to match the target RID's OS — you must run
-    `dotnet pack -r <RID>` separately on each platform (e.g. in a CI matrix).
-    Run `dotnet pack` (no RID) once to produce the top-level pointer package.
-
-    <ToolPackageRuntimeIdentifiers>win-x64;linux-x64;osx-arm64</ToolPackageRuntimeIdentifiers>
-    <PublishAot>true</PublishAot>
-    -->
-
-    <!--
-    MODE 3: Hybrid AOT + CoreCLR fallback — AOT for priority platforms, portable fallback for the rest.
-    Use ToolPackageRuntimeIdentifiers with `any` included, enable PublishAot, then pack each AOT RID
-    on its matching OS and pack the `any` fallback with PublishAot=false.
-
-    Build steps:
-      dotnet pack                              # pointer package (any platform)
-      dotnet pack -r win-x64                   # AOT on Windows
-      dotnet pack -r linux-x64                 # AOT on Linux
-      dotnet pack -r osx-arm64                 # AOT on macOS arm64
-      dotnet pack -r any -p:PublishAot=false   # CoreCLR fallback (any platform)
-
     <ToolPackageRuntimeIdentifiers>win-x64;linux-x64;osx-arm64;any</ToolPackageRuntimeIdentifiers>
+    <RuntimeIdentifiers>win-x64;linux-x64;osx-arm64;any</RuntimeIdentifiers>
+    <!--
+    With PublishAot on, a plain `dotnet pack` only produces the pointer package and each RID package needs its own `-r` pack
+    (on its own OS); with it off, one pack would build every RID package as CoreCLR on this OS. The `any` fallback is not AOT.
+    -->
     <PublishAot>true</PublishAot>
+    <PublishAot Condition="'$(RuntimeIdentifier)' == 'any'">false</PublishAot>
+
+    <!--
+    Evaluating projects needs the .NET SDK's managed MSBuild, which a Native AOT executable cannot load. That work runs in a separate
+    CoreCLR process (VsTestToMtp.MsBuildHost, see MsBuildHostLauncher) shipped inside the package. AOT packages carry it twice:
+    framework-dependent (msbuild-host/, used when the machine has a suitable .NET runtime) and self-contained (msbuild-host-bundled/,
+    used when it does not). The `any` package only carries the framework-dependent one. Do not trim either host: it loads SDK
+    assemblies that need the full framework.
     -->
   </PropertyGroup>
 
@@ -76,12 +63,59 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <!-- MSBuild assemblies are loaded from the located .NET SDK at runtime (MSBuildLocator), so they must not be shipped. -->
-    <PackageReference Include="Microsoft.Build" ExcludeAssets="runtime" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Build.Locator" />
     <PackageReference Include="Microsoft.VisualStudio.SolutionPersistence" />
     <PackageReference Include="System.CommandLine" />
+    <ProjectReference Include="..\VsTestToMtp.Contracts\VsTestToMtp.Contracts.csproj" />
+    <!--
+    MSBuild evaluation runs in a separate CoreCLR process (see MsBuildHostLauncher): this CLI is Native AOT and cannot load the SDK's
+    managed MSBuild. The host is built first but not referenced; its output is laid out next to the CLI by the targets below.
+    -->
+    <ProjectReference Include="..\VsTestToMtp.MsBuildHost\VsTestToMtp.MsBuildHost.csproj" ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="PublishAot;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed" />
   </ItemGroup>
 
-</Project>
+  <!--
+  Lay the framework-dependent host out as msbuild-host/ next to the CLI. It is a Content item so projects that reference this one
+  (the tests) get it in their output too. Publishing lays out its own copies; see PublishMsBuildHost.
+  -->
+  <Target Name="IncludeMsBuildHost" BeforeTargets="AssignTargetPaths" DependsOnTargets="ResolveProjectReferences">
+    <ItemGroup>
+      <_MsBuildHostFile Include="..\VsTestToMtp.MsBuildHost\bin\$(Configuration)\$(TargetFramework)\**\*" Exclude="**\*.pdb" />
+      <Content Include="@(_MsBuildHostFile)" Link="msbuild-host\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" Pack="false" />
+    </ItemGroup>
+  </Target>
 
+  <!--
+  Publishing (and so packing) adds the host to the publish folder: always the framework-dependent copy as msbuild-host/, and for
+  Native AOT builds also a self-contained copy for the target RID as msbuild-host-bundled/. The host is published by its own project,
+  without the CLI's AOT settings, so it stays a normal CoreCLR program.
+  -->
+  <Target Name="PublishMsBuildHost" BeforeTargets="ComputeResolvedFilesToPublishList">
+    <PropertyGroup>
+      <_HostProject>$(MSBuildThisFileDirectory)..\VsTestToMtp.MsBuildHost\VsTestToMtp.MsBuildHost.csproj</_HostProject>
+      <_HostFxDir>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)msbuild-host\</_HostFxDir>
+      <_HostBundledDir>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)msbuild-host-bundled\</_HostBundledDir>
+      <_HostBundled Condition="'$(PublishAot)' == 'true' and '$(RuntimeIdentifier)' != ''">true</_HostBundled>
+    </PropertyGroup>
+
+    <MSBuild Projects="$(_HostProject)" Targets="Publish"
+             Properties="Configuration=$(Configuration);SelfContained=false;PublishDir=$(_HostFxDir)"
+             RemoveProperties="PublishAot;RuntimeIdentifier;PublishSingleFile;PublishTrimmed;OutDir;OutputPath;NoBuild" />
+
+    <!-- A self-contained publish needs the runtime pack in the host's assets file, so restore it for this RID first. -->
+    <MSBuild Condition="'$(_HostBundled)' == 'true'" Projects="$(_HostProject)" Targets="Restore"
+             Properties="Configuration=$(Configuration);SelfContained=true;RuntimeIdentifier=$(RuntimeIdentifier);MSBuildRestoreSessionId=$([System.Guid]::NewGuid())"
+             RemoveProperties="PublishAot;PublishSingleFile;PublishTrimmed;OutDir;OutputPath;NoBuild" />
+    <MSBuild Condition="'$(_HostBundled)' == 'true'" Projects="$(_HostProject)" Targets="Publish"
+             Properties="Configuration=$(Configuration);SelfContained=true;RuntimeIdentifier=$(RuntimeIdentifier);PublishDir=$(_HostBundledDir)"
+             RemoveProperties="PublishAot;PublishSingleFile;PublishTrimmed;OutDir;OutputPath;NoBuild" />
+
+    <ItemGroup>
+      <_HostFxFile Include="$(_HostFxDir)**" Exclude="$(_HostFxDir)**\*.pdb" />
+      <ResolvedFileToPublish Include="@(_HostFxFile)" RelativePath="msbuild-host\%(RecursiveDir)%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" />
+      <_HostBundledFile Condition="'$(_HostBundled)' == 'true'" Include="$(_HostBundledDir)**" Exclude="$(_HostBundledDir)**\*.pdb" />
+      <ResolvedFileToPublish Include="@(_HostBundledFile)" RelativePath="msbuild-host-bundled\%(RecursiveDir)%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
+</Project>

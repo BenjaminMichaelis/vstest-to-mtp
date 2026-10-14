@@ -31,9 +31,10 @@ public class InventoryEnvironmentTests
     }
 
     [Test]
-    public async Task SelectionPinnedToADifferentSdkThanTheLoadedOne_IsReportedAsMismatch()
+    public async Task SelectionPinnedToADifferentSdkThanAnEarlierOne_IsEvaluatedWithItsOwnSdk()
     {
-        // Every workspace pins the fixtures' SDK, so evaluating one first registers that SDK (or confirms it is already registered).
+        // Every evaluation runs in its own MSBuild host process, so unlike an in-process MSBuild (registered once per process)
+        // a later selection pinned to another SDK is evaluated with that SDK instead of being refused.
         using ScenarioWorkspace pinnedLikeTheFixtures = new ScenarioWorkspace().WriteProject("App/App.csproj");
         ProjectInventory evaluated = pinnedLikeTheFixtures.Inventory("App/App.csproj").Projects.Single();
         await Assert.That(evaluated.Blockers).IsEmpty();
@@ -50,12 +51,10 @@ public class InventoryEnvironmentTests
         using ScenarioWorkspace pinnedElsewhere = new ScenarioWorkspace()
             .Write("global.json", Pin(other.Version))
             .WriteProject("App/App.csproj");
-        ProjectInventory refused = pinnedElsewhere.Inventory("App/App.csproj").Projects.Single();
+        ProjectInventory evaluatedElsewhere = pinnedElsewhere.Inventory("App/App.csproj").Projects.Single();
 
-        await Assert.That(refused.Classification).IsEqualTo(ProjectClassification.Unknown);
-        InventoryBlocker blocker = refused.Blockers.Single();
-        await Assert.That(blocker.Code).IsEqualTo(BlockerCode.MsBuildSdkMismatch);
-        await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+        await Assert.That(evaluatedElsewhere.Classification).IsEqualTo(ProjectClassification.Production);
+        await Assert.That(evaluatedElsewhere.Blockers).IsEmpty();
     }
 
     [Test]
@@ -77,6 +76,29 @@ public class InventoryEnvironmentTests
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
         await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildSdkNewerThanRuntime]);
+    }
+
+    [Test]
+    public async Task MsBuildHostThatCannotBeStarted_IsReportedAsMsBuildHostFailed()
+    {
+        // The test layout has no self-contained host to fall back to, so a machine without a usable `dotnet` has nowhere to run it.
+        string? previous = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
+        Environment.SetEnvironmentVariable("DOTNET_HOST_PATH", Path.Combine(Path.GetTempPath(), "no-such-dotnet-" + Guid.NewGuid().ToString("N")));
+        try
+        {
+            using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject("App/App.csproj");
+
+            InventoryResult result = workspace.Inventory("App/App.csproj");
+
+            ProjectInventory project = result.Projects.Single();
+            await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+            await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
+            await Assert.That(result.Blockers.Select(b => b.Code)).Contains(BlockerCode.MsBuildHostFailed);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DOTNET_HOST_PATH", previous);
+        }
     }
 
     private const int MinimumSdkMajorVersion = 8;
