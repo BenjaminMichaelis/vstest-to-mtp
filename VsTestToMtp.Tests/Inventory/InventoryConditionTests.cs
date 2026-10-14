@@ -319,6 +319,48 @@ public class InventoryConditionTests
     }
 
     [Test]
+    public async Task PackageInsideChooseWhen_OnAnUnsetProperty_IsFlagged_NotACrash()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <Choose>\n    <When Condition=\"'$(VSTEST_TO_MTP_UNSET_FLAG)' == 'x'\">\n      <ItemGroup>\n        <PackageReference Include=\"NUnit\" Version=\"1.0.0\" />\n      </ItemGroup>\n    </When>\n  </Choose>");
+
+        InventoryBlocker blocker = Blockers(workspace).Single(b => b.Code == BlockerCode.ConditionDependsOnUnsetProperty);
+
+        await Assert.That(blocker.Location!.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "<PackageReference"));
+    }
+
+    [Test]
+    public async Task PackageInsideChooseOtherwise_DependsOnTheSiblingWhenConditions_AndIsFlagged()
+    {
+        // The Otherwise branch is taken when every When is false, so it depends on the same properties as the Whens.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <Choose>\n    <When Condition=\"'$(VSTEST_TO_MTP_UNSET_FLAG)' == 'x'\">\n      <PropertyGroup>\n        <Other>1</Other>\n      </PropertyGroup>\n    </When>\n"
+                + "    <Otherwise>\n      <ItemGroup>\n        <PackageReference Include=\"NUnit\" Version=\"2.0.0\" />\n      </ItemGroup>\n    </Otherwise>\n  </Choose>");
+
+        IReadOnlyList<InventoryBlocker> blockers = Blockers(workspace);
+
+        await Assert.That(blockers.Select(b => b.Code)).Contains(BlockerCode.ConditionDependsOnUnsetProperty);
+        await Assert.That(blockers.Any(b => b.Location!.Line == workspace.LineOf("App/App.csproj", "<PackageReference"))).IsTrue();
+    }
+
+    [Test]
+    public async Task PackageInsideChoose_OnADefinedProperty_IsNotFlagged()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <PropertyGroup>\n    <Flavor>a</Flavor>\n  </PropertyGroup>\n"
+                + "  <Choose>\n    <When Condition=\"'$(Flavor)' == 'a'\">\n      <ItemGroup>\n        <PackageReference Include=\"NUnit\" Version=\"1.0.0\" />\n      </ItemGroup>\n    </When>\n"
+                + "    <Otherwise>\n      <ItemGroup>\n        <PackageReference Include=\"NUnit\" Version=\"2.0.0\" />\n      </ItemGroup>\n    </Otherwise>\n  </Choose>");
+
+        await Assert.That(Blockers(workspace)).IsEmpty();
+    }
+
+    [Test]
     public async Task HyphenatedPropertyName_IsAnalysedLikeAnyOther()
     {
         // MSBuild property names may contain hyphens, so a condition on an unset one must still be reported.

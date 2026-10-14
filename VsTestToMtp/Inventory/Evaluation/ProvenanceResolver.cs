@@ -91,9 +91,22 @@ internal sealed class ProvenanceResolver
         List<string> conditions = [];
         for (ProjectElement? current = element; current is not null; current = current.Parent)
         {
-            if (current is not ProjectRootElement && current.Condition.Trim() is { Length: > 0 } condition)
+            // Choose and Otherwise elements have no Condition attribute, so MSBuild reports it as null.
+            if (current is not ProjectRootElement && current.Condition?.Trim() is { Length: > 0 } condition)
             {
                 conditions.Insert(0, condition);
+            }
+
+            // An Otherwise branch is taken when every When of its Choose is false, so it depends on whatever those conditions depend on.
+            if (current is ProjectOtherwiseElement { Parent: ProjectChooseElement choose })
+            {
+                foreach (ProjectWhenElement when in choose.WhenElements.Reverse())
+                {
+                    if (when.Condition?.Trim() is { Length: > 0 } whenCondition)
+                    {
+                        conditions.Insert(0, whenCondition);
+                    }
+                }
             }
         }
 

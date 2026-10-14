@@ -80,11 +80,15 @@ When adding a check, decide which of these it falls under; most review findings 
   `Packages`, and where a blocker points (a version blocker points at the element that declares the offending `Version`/`VersionOverride`, which
   can be an `Update` in another file). It does **not** decide whether MSBuild's picture of the project is complete: an ignored (missing, empty or
   invalid) import is reported wherever the importing file lives, with advice that points at the SDK or package when it is not the repository's file.
-- **Condition analysis covers every element that can change a relevant value.** Analysed: relevant property elements; item elements of the relevant
-  types (`PackageReference`, `PackageVersion`, `GlobalPackageReference`, `ProjectReference`), their metadata elements, item definitions of those
-  types and their metadata; and imports. Property and import conditions see only properties defined earlier in evaluation order; items, item
-  definitions and metadata are evaluated after every property and so see final state. Not analysed (see #30): `Choose`/`When`/`Otherwise` branches
-  and targets/tasks (which do not run during evaluation).
+- **Condition analysis covers the elements that can change a relevant value, and says where it does not.** Analysed: relevant property elements;
+  item elements of the relevant types (`PackageReference`, `PackageVersion`, `GlobalPackageReference`, `ProjectReference`), their metadata
+  elements, item definitions of those types and their metadata; imports and `ImportGroup`s; and the `When` conditions of a `Choose` that encloses
+  any of these (an `Otherwise` branch is taken when every sibling `When` is false, so it is analysed through those conditions). Property and
+  import conditions see only properties defined earlier in evaluation order; items, item definitions and metadata are evaluated after every
+  property and so see final state. Known gaps, found by running each way a package version can depend on the environment (see #30):
+  a property *value* that expands an environment-provided or unset property inside a relevant item (`Version="$(CI_VERSION)"`) involves no
+  condition, so nothing is checked; and a condition on a property that merely *feeds* such a value is not analysed unless that property is itself
+  one of the relevant ones. Targets and tasks do not run during evaluation.
 
 ## Known limits
 
