@@ -32,7 +32,7 @@ public static class InventoryBuilder
 
         List<ProjectInventory> projects = selection.ProjectPaths.Count == 0
             ? []
-            : EvaluateProjects(selection, selectionDirectory, formatter, blockers);
+            : EvaluateProjects(selection, selectionDirectory, formatter, options, blockers);
 
         projects = [.. projects
             .OrderBy(p => p.Path, StringComparer.OrdinalIgnoreCase)
@@ -54,6 +54,7 @@ public static class InventoryBuilder
         SolutionReader.Selection selection,
         string selectionDirectory,
         PathFormatter formatter,
+        InventoryOptions? options,
         List<InventoryBlocker> blockers)
     {
         if (MsBuildEnvironment.TryRegister(selectionDirectory) is { } blocker)
@@ -67,17 +68,19 @@ public static class InventoryBuilder
             ];
         }
 
-        return EvaluateRegistered(selection, formatter);
+        return EvaluateRegistered(selection, formatter, options);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static List<ProjectInventory> EvaluateRegistered(SolutionReader.Selection selection, PathFormatter formatter)
+    private static List<ProjectInventory> EvaluateRegistered(SolutionReader.Selection selection, PathFormatter formatter, InventoryOptions? options)
     {
         HashSet<string> selected = new(selection.ProjectPaths, PathComparison.Comparer);
-        using ProjectEvaluator evaluator = new(formatter, selected);
 
         lock (EvaluationLock)
         {
+            // Evaluation must not extract an SDK package into the repository; see NuGetPackagesScope.
+            using NuGetPackagesScope packages = NuGetPackagesScope.Redirect(options?.SdkPackagesDirectory);
+            using ProjectEvaluator evaluator = new(formatter, selected);
             return
             [
                 .. selection.ProjectPaths.Select(p =>

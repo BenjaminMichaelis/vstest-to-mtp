@@ -11,12 +11,10 @@ namespace VsTestToMtp.Inventory;
 /// </summary>
 internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
 {
-    // Environment-provided properties that are present on every machine and not worth flagging. MSBuildExtensionsPath and
-    // MSBuildSDKsPath are environment variables that MSBuildLocator sets when it registers the SDK, so they hold the same
-    // meaning for everyone using that SDK.
+    // Environment variables that MSBuildLocator sets when it registers the SDK, so they hold the same meaning for everyone using
+    // that SDK and are not worth flagging. ($(OS) is deliberately not here: it differs between Windows and Unix.)
     private static readonly HashSet<string> WellKnownEnvironmentProperties = new(StringComparer.OrdinalIgnoreCase)
     {
-        "OS",
         "MSBuildExtensionsPath",
         "MSBuildSDKsPath",
     };
@@ -177,6 +175,14 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             bool isUnsetProbe = IsUnsetProbe(condition, name);
             ProjectProperty? value = project.GetProperty(name);
             PropertySourceAtEvaluation source = SourceAt(value, evaluatedAt, order);
+
+            // $(OS) is "Windows_NT" on Windows and "Unix" elsewhere, however MSBuild supplies it, so a condition on it varies by
+            // machine unless the project assigns it itself.
+            if (string.Equals(name, "OS", StringComparison.OrdinalIgnoreCase) && source != PropertySourceAtEvaluation.File)
+            {
+                source = PropertySourceAtEvaluation.Environment;
+            }
+
             if (!isUnsetProbe && source == PropertySourceAtEvaluation.Unset)
             {
                 string state = value is null ? "which is not set" : "which is only set later in evaluation";
@@ -234,7 +240,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             // A file definition counts when it is evaluated before the element (or when evaluation order does not apply).
             if (evaluatedAt is not { } at || order.IndexOf(definition.Xml) is not { } index || index < at)
             {
-                return PropertySourceAtEvaluation.Other;
+                return PropertySourceAtEvaluation.File;
             }
         }
 
@@ -259,6 +265,11 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     {
         Unset,
         Environment,
+
+        /// <summary>Assigned by an element of a project or imported file that is evaluated first.</summary>
+        File,
+
+        /// <summary>Supplied by MSBuild itself (global or reserved).</summary>
         Other,
     }
 
@@ -273,6 +284,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     [GeneratedRegex(@"\$\(\s*IsTestProject\s*\)", RegexOptions.IgnoreCase)]
     private static partial Regex IsTestProjectReference();
 
-    [GeneratedRegex(@"\$\(\s*(?<n>[A-Za-z_][A-Za-z0-9_]*)\s*\)")]
+    // MSBuild property names start with a letter or underscore and may then also contain hyphens.
+    [GeneratedRegex(@"\$\(\s*(?<n>[A-Za-z_][A-Za-z0-9_\-]*)\s*\)")]
     private static partial Regex PropertyReferences();
 }

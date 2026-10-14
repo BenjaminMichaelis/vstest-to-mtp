@@ -152,8 +152,9 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         try
         {
             // A versioned Sdk="Name/1.2.3" (for example MSTest.Sdk) is resolved by MSBuild's NuGet SDK resolver, which downloads a missing
-            // package into the NuGet global packages folder (never the repository). Like Roslyn, slngen and `dotnet new`, we leave it on;
-            // MSBUILDDISABLENUGETSDKRESOLVER=1 is its only off switch.
+            // package into the NuGet global packages folder. A NuGet.config in the repository can put that folder inside the repository,
+            // so InventoryBuilder evaluates inside a NuGetPackagesScope that redirects it. Like Roslyn, slngen and `dotnet new`, we leave
+            // the resolver on; MSBUILDDISABLENUGETSDKRESOLVER=1 is its only off switch.
             // https://github.com/NuGet/NuGet.Client/blob/b337f5b80d3363a61f773f2e1c3757526a474610/src/NuGet.Core/Microsoft.Build.NuGetSdkResolver/NuGetSdkResolver.cs#L56-L60
             return Project.FromFile(projectPath, new ProjectOptions
             {

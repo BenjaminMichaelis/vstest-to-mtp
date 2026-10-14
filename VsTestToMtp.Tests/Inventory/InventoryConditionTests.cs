@@ -256,6 +256,58 @@ public class InventoryConditionTests
         }
     }
 
+    [Test]
+    public async Task OsProperty_IsFlagged_BecauseItsValueDiffersBetweenWindowsAndUnix()
+    {
+        // The same project can be a test application on Windows and production on Linux when a package is guarded by $(OS).
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <ItemGroup Condition=\"'$(OS)' == 'Windows_NT'\">\n    <PackageReference Include=\"MSTest\" Version=\"4.0.2\" />\n  </ItemGroup>");
+
+        InventoryBlocker blocker = Blockers(workspace).Single(b => b.Code == BlockerCode.ConditionDependsOnEnvironment);
+
+        await Assert.That(blocker.Message).Contains("OS");
+    }
+
+    [Test]
+    public async Task OsProperty_AssignedByTheProjectBeforeTheCondition_IsNotFlagged()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <PropertyGroup>\n    <OS>Custom</OS>\n  </PropertyGroup>\n"
+                + "  <PropertyGroup Condition=\"'$(OS)' == 'Custom'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+
+        await Assert.That(Blockers(workspace)).IsEmpty();
+    }
+
+    [Test]
+    public async Task HyphenatedPropertyName_IsAnalysedLikeAnyOther()
+    {
+        // MSBuild property names may contain hyphens, so a condition on an unset one must still be reported.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <PropertyGroup Condition=\"'$(Feature-Flag)' == 'true'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+
+        InventoryBlocker blocker = Blockers(workspace).Single(b => b.Code == BlockerCode.ConditionDependsOnUnsetProperty);
+
+        await Assert.That(blocker.Message).Contains("Feature-Flag");
+    }
+
+    [Test]
+    public async Task HyphenatedPropertyThatIsDefined_IsNotFlagged()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <PropertyGroup>\n    <Feature-Flag>true</Feature-Flag>\n  </PropertyGroup>\n"
+                + "  <PropertyGroup Condition=\"'$(Feature-Flag)' == 'true'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+
+        await Assert.That(Blockers(workspace)).IsEmpty();
+    }
+
     private static IReadOnlyList<InventoryBlocker> Blockers(ScenarioWorkspace workspace) =>
         workspace.Inventory("App/App.csproj").Projects.Single().Blockers;
 }

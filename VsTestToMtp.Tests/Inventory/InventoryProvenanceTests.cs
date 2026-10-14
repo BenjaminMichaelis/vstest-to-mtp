@@ -76,47 +76,101 @@ public class InventoryProvenanceTests
         await Assert.That(net8.Definition!.IsRepositoryFile).IsFalse();
     }
 
+    private const string LocalFeedNuGetConfig = """
+        <configuration>
+          <config>
+            <add key="globalPackagesFolder" value="packages" />
+          </config>
+          <packageSources>
+            <clear />
+            <add key="local" value="feed" />
+          </packageSources>
+        </configuration>
+        """;
+
+    private const string SdkProps = """
+        <Project>
+          <PropertyGroup>
+            <IsPackable>false</IsPackable>
+          </PropertyGroup>
+        </Project>
+        """;
+
     [Test]
-    public async Task FilesFromAVersionedSdkPackage_AreNotRepositoryFiles_WhereverNuGetPutsThem()
+    public async Task FilesFromAVersionedSdkPackage_AreNotRepositoryFiles_WhereverTheyAreExtracted()
     {
-        // NUGET_PACKAGES overrides NuGet.config's globalPackagesFolder, which this test relies on.
+        // NUGET_PACKAGES decides where the package goes when it is set, which these tests control themselves.
         if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
         {
-            Skip.Test("NUGET_PACKAGES is set, so the workspace's globalPackagesFolder would be ignored.");
+            Skip.Test("NUGET_PACKAGES is set, so the SDK package location is not under this test's control.");
             return;
         }
 
-        // The SDK package comes from a local feed and lands in a packages folder NuGet.config moves inside the workspace,
-        // so nothing about its path says "NuGet"; only MSBuild's SDK resolution does.
+        // The SDK package comes from a local feed and is extracted to a folder with no "NuGet" in its path,
+        // so nothing about the path says what it is; only MSBuild's SDK resolution does.
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-sdk-cache", Guid.NewGuid().ToString("N"));
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("NuGet.config", """
-                <configuration>
-                  <config>
-                    <add key="globalPackagesFolder" value="packages" />
-                  </config>
-                  <packageSources>
-                    <clear />
-                    <add key="local" value="feed" />
-                  </packageSources>
-                </configuration>
-                """)
+            .Write("NuGet.config", LocalFeedNuGetConfig)
             .WriteProject("App/App.csproj", """  <Sdk Name="Local.Test.Sdk" Version="1.0.0" />""");
-        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", """
-            <Project>
-              <PropertyGroup>
-                <IsPackable>false</IsPackable>
-              </PropertyGroup>
-            </Project>
-            """);
+        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", SdkProps);
 
-        ProjectInventory app = workspace.Inventory("App/App.csproj").Projects.Single();
+        try
+        {
+            ProjectInventory app = InventoryBuilder
+                .Build(workspace.PathOf("App/App.csproj"), new InventoryOptions(workspace.RootPath, SdkPackagesDirectory: cache))
+                .Projects.Single();
 
-        await Assert.That(app.Blockers).IsEmpty();
-        PropertyState isPackable = app.TargetFrameworks.Single().GetProperty("IsPackable")!;
-        await Assert.That(isPackable.Value).IsEqualTo("false");
-        await Assert.That(isPackable.Definition!.Location.File).StartsWith("packages/");
-        await Assert.That(isPackable.Definition.IsRepositoryFile).IsFalse();
-        await Assert.That(app.Imports.Select(i => i.File)).DoesNotContain(f => f.StartsWith("packages/", StringComparison.Ordinal));
+            await Assert.That(app.Blockers).IsEmpty();
+            PropertyState isPackable = app.TargetFrameworks.Single().GetProperty("IsPackable")!;
+            await Assert.That(isPackable.Value).IsEqualTo("false");
+            await Assert.That(Path.GetFullPath(isPackable.Definition!.Location.File)).StartsWith(cache);
+            await Assert.That(isPackable.Definition.IsRepositoryFile).IsFalse();
+            await Assert.That(app.Imports.Select(i => i.File)).DoesNotContain(f => f.StartsWith(cache.Replace('\\', '/'), StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(cache))
+            {
+                Directory.Delete(cache, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public async Task VersionedSdkPackage_IsNeverExtractedIntoTheRepository_EvenWhenNuGetConfigPutsThePackagesFolderThere()
+    {
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the SDK package location is not under this test's control.");
+            return;
+        }
+
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-sdk-cache", Guid.NewGuid().ToString("N"));
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("NuGet.config", LocalFeedNuGetConfig)
+            .WriteProject("App/App.csproj", """  <Sdk Name="Local.Test.Sdk" Version="1.0.0" />""");
+        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", SdkProps);
+        string before = Fixtures.FixtureWorkspace.ComputeHash(workspace.RootPath);
+
+        try
+        {
+            ProjectInventory app = InventoryBuilder
+                .Build(workspace.PathOf("App/App.csproj"), new InventoryOptions(workspace.RootPath, SdkPackagesDirectory: cache))
+                .Projects.Single();
+
+            // The SDK was still resolved (from the redirected folder), but nothing was written into the repository.
+            await Assert.That(app.TargetFrameworks.Single().GetProperty("IsPackable")!.Value).IsEqualTo("false");
+            await Assert.That(Directory.Exists(workspace.PathOf("packages"))).IsFalse();
+            await Assert.That(Fixtures.FixtureWorkspace.ComputeHash(workspace.RootPath)).IsEqualTo(before);
+            await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
+        }
+        finally
+        {
+            if (Directory.Exists(cache))
+            {
+                Directory.Delete(cache, recursive: true);
+            }
+        }
     }
 
     /// <summary>Writes a minimal MSBuild SDK package (<c>Sdk/Sdk.props</c> and <c>Sdk/Sdk.targets</c>) to a local feed.</summary>
