@@ -51,8 +51,8 @@ public class InventoryScenarioTests
         await Assert.That(result.Selection.Kind).IsEqualTo(SelectionKind.Sln);
         await Assert.That(result.Projects.Select(p => p.Path)).IsEquivalentTo(["src/App/App.csproj"]);
         await Assert.That(result.Blockers.Select(b => b.Code)).IsEquivalentTo(
-            [BlockerCodes.MissingProject, BlockerCodes.UnsupportedProjectLanguage]);
-        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCodes.MissingProject).Severity).IsEqualTo(BlockerSeverity.Error);
+            [BlockerCode.MissingProject, BlockerCode.UnsupportedProjectLanguage]);
+        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCode.MissingProject).Severity).IsEqualTo(BlockerSeverity.Error);
     }
 
     [Test]
@@ -93,7 +93,7 @@ public class InventoryScenarioTests
         InventoryResult result = InventoryBuilder.Build(workspace.RootPath, new InventoryOptions(workspace.RootPath));
 
         await Assert.That(result.Projects).IsEmpty();
-        await Assert.That(result.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.AmbiguousSelection]);
+        await Assert.That(result.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.AmbiguousSelection]);
     }
 
     [Test]
@@ -134,7 +134,7 @@ public class InventoryScenarioTests
 
         InventoryResult result = InventoryBuilder.Build(workspace.RootPath, new InventoryOptions(workspace.RootPath));
 
-        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCodes.AmbiguousSelection).RelatedLocations.Select(l => l.File))
+        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCode.AmbiguousSelection).RelatedLocations.Select(l => l.File))
             .IsEquivalentTo(["A.SLN", "b.slnx"], CollectionOrdering.Matching);
     }
 
@@ -150,7 +150,7 @@ public class InventoryScenarioTests
         InventoryResult result = InventoryBuilder.Build(workspace.RootPath, new InventoryOptions(workspace.RootPath));
 
         // Case-insensitive order ties, then ordinal decides: uppercase sorts before lowercase.
-        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCodes.AmbiguousSelection).RelatedLocations.Select(l => l.File))
+        await Assert.That(result.Blockers.Single(b => b.Code == BlockerCode.AmbiguousSelection).RelatedLocations.Select(l => l.File))
             .IsEquivalentTo(["B.SLNX", "b.slnx"], CollectionOrdering.Matching);
     }
 
@@ -161,14 +161,14 @@ public class InventoryScenarioTests
 
         InventoryResult result = workspace.Inventory("Nope.slnx");
 
-        await Assert.That(result.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.SelectionNotFound]);
+        await Assert.That(result.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.SelectionNotFound]);
     }
 
     [Test]
     public async Task ProductionProject_WithTestLibraryDependency_IsNotATestApplication()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("src/Helpers/Helpers.csproj", ScenarioWorkspace.PackageReferences("MSTest.TestFramework|3.9.0"));
+            .WriteProject("src/Helpers/Helpers.csproj", ScenarioWorkspace.PackageReferences(new PackageRef("MSTest.TestFramework", "3.9.0")));
 
         ProjectInventory project = workspace.Inventory("src/Helpers/Helpers.csproj").Projects.Single();
 
@@ -181,7 +181,7 @@ public class InventoryScenarioTests
     public async Task TestSdkAlone_DoesNotEstablishATestApplication()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("Microsoft.NET.Test.Sdk|18.0.0"));
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences(new PackageRef("Microsoft.NET.Test.Sdk", "18.0.0")));
 
         await Assert.That(workspace.Inventory("App/App.csproj").Projects.Single().Classification).IsEqualTo(ProjectClassification.Production);
     }
@@ -202,9 +202,13 @@ public class InventoryScenarioTests
     public async Task SharedPropsPackages_DoNotEstablishATestApplication()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Build.props", $"<Project>\n{ScenarioWorkspace.PackageReferences("Microsoft.NET.Test.Sdk|18.0.0", "xunit.runner.visualstudio|3.1.0")}\n</Project>")
-            .WriteProject("Lib/Lib.csproj", ScenarioWorkspace.PackageReferences("xunit|2.9.3"))
-            .WriteProject("Lib.Tests/Lib.Tests.csproj", ScenarioWorkspace.PackageReferences("xunit|2.9.3", "xunit.runner.visualstudio|3.1.0"))
+            .Write("Directory.Build.props", $"""
+                <Project>
+                {ScenarioWorkspace.PackageReferences(new PackageRef("Microsoft.NET.Test.Sdk", "18.0.0"), new PackageRef("xunit.runner.visualstudio", "3.1.0"))}
+                </Project>
+                """)
+            .WriteProject("Lib/Lib.csproj", ScenarioWorkspace.PackageReferences(new PackageRef("xunit", "2.9.3")))
+            .WriteProject("Lib.Tests/Lib.Tests.csproj", ScenarioWorkspace.PackageReferences(new PackageRef("xunit", "2.9.3"), new PackageRef("xunit.runner.visualstudio", "3.1.0")))
             .WriteSlnx("All.slnx", "Lib/Lib.csproj", "Lib.Tests/Lib.Tests.csproj");
 
         InventoryResult result = workspace.Inventory("All.slnx");
@@ -212,7 +216,7 @@ public class InventoryScenarioTests
         ProjectInventory lib = result.Projects.Single(p => p.Name == "Lib");
         await Assert.That(lib.Classification).IsEqualTo(ProjectClassification.Production);
         await Assert.That(lib.HasTestLibraryDependency).IsTrue();
-        await Assert.That(lib.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.TestEvidenceOnlyFromImports]);
+        await Assert.That(lib.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.TestEvidenceOnlyFromImports]);
 
         ProjectInventory tests = result.Projects.Single(p => p.Name == "Lib.Tests");
         await Assert.That(tests.Classification).IsEqualTo(ProjectClassification.TestApplication);
@@ -227,8 +231,12 @@ public class InventoryScenarioTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "Tool/Tool.csproj",
-                "  <PropertyGroup>\n    <IsTestProject>false</IsTestProject>\n  </PropertyGroup>\n"
-                + ScenarioWorkspace.PackageReferences("MSTest|4.0.2"));
+                $"""
+                  <PropertyGroup>
+                    <IsTestProject>false</IsTestProject>
+                  </PropertyGroup>
+                {ScenarioWorkspace.PackageReferences(new PackageRef("MSTest", "4.0.2"))}
+                """);
 
         ProjectInventory project = workspace.Inventory("Tool/Tool.csproj").Projects.Single();
 
@@ -274,7 +282,7 @@ public class InventoryScenarioTests
                     <PackageReference Include="NUnit3TestAdapter" Version="5.0.0" />
                   </ItemGroup>
                 """,
-                "<TargetFrameworks>net10.0;net8.0</TargetFrameworks>");
+                targetFrameworks: ["net10.0", "net8.0"]);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
@@ -282,7 +290,7 @@ public class InventoryScenarioTests
             [("net10.0", ProjectClassification.TestApplication), ("net8.0", ProjectClassification.Production)],
             CollectionOrdering.Matching);
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Mixed);
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.TargetFrameworkClassificationDiffers]);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.TargetFrameworkClassificationDiffers]);
 
         PackageReferenceState nunit = project.TargetFrameworks.Single(t => t.TargetFramework == "net10.0").Packages.Single(p => p.Name == "NUnit");
         await Assert.That(nunit.Definition.Conditions).IsEquivalentTo(["'$(TargetFramework)' == 'net10.0'"]);
@@ -297,12 +305,14 @@ public class InventoryScenarioTests
             .WriteProject(
                 "App/App.csproj",
                 """
+                  <PropertyGroup>
+                    <TargetFrameworks>net10.0;net8.0</TargetFrameworks>
+                  </PropertyGroup>
                   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
                     <PackageReference Include="NUnit" Version="4.3.2" />
                     <PackageReference Include="NUnit3TestAdapter" Version="5.0.0" />
                   </ItemGroup>
-                """,
-                "<TargetFramework>net10.0</TargetFramework>\n    <TargetFrameworks>net10.0;net8.0</TargetFrameworks>");
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
@@ -314,9 +324,15 @@ public class InventoryScenarioTests
     [Test]
     public async Task ExplicitParentImports_AreRecordedInTheImportChain()
     {
-        const string importParent = "<Import Project=\"$([MSBuild]::GetPathOfFileAbove('{0}', '$(MSBuildThisFileDirectory)../'))\" />";
+        const string importParent = """<Import Project="$([MSBuild]::GetPathOfFileAbove('{0}', '$(MSBuildThisFileDirectory)../'))" />""";
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Build.props", "<Project>\n  <PropertyGroup>\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n</Project>")
+            .Write("Directory.Build.props", """
+                <Project>
+                  <PropertyGroup>
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                </Project>
+                """)
             .Write("Directory.Packages.props", """
                 <Project>
                   <ItemGroup>
@@ -324,8 +340,19 @@ public class InventoryScenarioTests
                   </ItemGroup>
                 </Project>
                 """)
-            .Write("sub/Directory.Build.props", $"<Project>\n  {string.Format(importParent, "Directory.Build.props")}\n</Project>")
-            .Write("sub/Directory.Packages.props", $"<Project>\n  {string.Format(importParent, "Directory.Packages.props")}\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n</Project>")
+            .Write("sub/Directory.Build.props", $"""
+                <Project>
+                  {string.Format(importParent, "Directory.Build.props")}
+                </Project>
+                """)
+            .Write("sub/Directory.Packages.props", $"""
+                <Project>
+                  {string.Format(importParent, "Directory.Packages.props")}
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                </Project>
+                """)
             .WriteProject("sub/App/App.csproj", ScenarioWorkspace.PackageReferences("NUnit"));
 
         ProjectInventory project = workspace.Inventory("sub/App/App.csproj").Projects.Single();
@@ -352,8 +379,21 @@ public class InventoryScenarioTests
     public async Task VersionOverride_IsReportedAsOverride()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Packages.props", "<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n  <ItemGroup>\n    <PackageVersion Include=\"NUnit\" Version=\"4.3.2\" />\n  </ItemGroup>\n</Project>")
-            .WriteProject("App/App.csproj", "  <ItemGroup>\n    <PackageReference Include=\"NUnit\" VersionOverride=\"4.0.0\" />\n  </ItemGroup>");
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", """
+                  <ItemGroup>
+                    <PackageReference Include="NUnit" VersionOverride="4.0.0" />
+                  </ItemGroup>
+                """);
 
         PackageReferenceState nunit = workspace.Inventory("App/App.csproj").Projects.Single().TargetFrameworks.Single().Packages.Single();
 
@@ -366,12 +406,15 @@ public class InventoryScenarioTests
     public async Task MissingImport_BlocksClassificationWithLocation()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", "  <Import Project=\"missing.props\" />\n" + ScenarioWorkspace.PackageReferences("MSTest|4.0.2"));
+            .WriteProject("App/App.csproj", $"""
+                  <Import Project="missing.props" />
+                {ScenarioWorkspace.PackageReferences(new PackageRef("MSTest", "4.0.2"))}
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.MissingImport);
+        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.MissingImport);
         await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
         await Assert.That(blocker.Location!.File).IsEqualTo("App/App.csproj");
         await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "<Import Project=\"missing.props\""));
@@ -382,7 +425,7 @@ public class InventoryScenarioTests
     public async Task ConditionalImportOfMissingFile_IsNotABlocker()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", "  <Import Project=\"missing.props\" Condition=\"Exists('missing.props')\" />");
+            .WriteProject("App/App.csproj", """  <Import Project="missing.props" Condition="Exists('missing.props')" />""");
 
         await Assert.That(workspace.Inventory("App/App.csproj").Blockers).IsEmpty();
     }
@@ -392,12 +435,16 @@ public class InventoryScenarioTests
     {
         // No parent Directory.Build.props exists, so GetPathOfFileAbove expands to nothing.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Build.props", "<Project>\n  <Import Project=\"$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))\" />\n</Project>")
+            .Write("Directory.Build.props", """
+                <Project>
+                  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+                </Project>
+                """)
             .WriteProject("App/App.csproj");
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
-        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.MissingImport);
+        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.MissingImport);
         await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
         await Assert.That(blocker.Location!.File).IsEqualTo("Directory.Build.props");
         await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("Directory.Build.props", "GetPathOfFileAbove"));
@@ -409,15 +456,19 @@ public class InventoryScenarioTests
     {
         // The file with the broken import is only imported by the net10.0 inner build, never by the outer one.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("App/net10.props", "<Project>\n  <Import Project=\"$([MSBuild]::GetPathOfFileAbove('no-such-parent.props', '$(MSBuildThisFileDirectory)../'))\" />\n</Project>")
+            .Write("App/net10.props", """
+                <Project>
+                  <Import Project="$([MSBuild]::GetPathOfFileAbove('no-such-parent.props', '$(MSBuildThisFileDirectory)../'))" />
+                </Project>
+                """)
             .WriteProject(
                 "App/App.csproj",
-                "  <Import Project=\"net10.props\" Condition=\"'$(TargetFramework)' == 'net10.0'\" />",
-                "<TargetFrameworks>net10.0;net8.0</TargetFrameworks>");
+                """  <Import Project="net10.props" Condition="'$(TargetFramework)' == 'net10.0'" />""",
+                targetFrameworks: ["net10.0", "net8.0"]);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
-        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.MissingImport);
+        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.MissingImport);
         await Assert.That(blocker.Location!.File).IsEqualTo("App/net10.props");
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
     }
@@ -428,14 +479,14 @@ public class InventoryScenarioTests
         // All projects in one run share an MSBuild ProjectCollection (and its logger), so each skipped import must still be
         // attributed to the project whose evaluation produced it.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("Broken/Broken.csproj", "  <Import Project=\"missing.props\" />")
+            .WriteProject("Broken/Broken.csproj", """  <Import Project="missing.props" />""")
             .WriteProject("Fine/Fine.csproj")
             .WriteProject("Later/Later.csproj")
             .WriteSlnx("All.slnx", "Broken/Broken.csproj", "Fine/Fine.csproj", "Later/Later.csproj");
 
         IReadOnlyList<ProjectInventory> projects = workspace.Inventory("All.slnx").Projects;
 
-        await Assert.That(projects.Single(p => p.Name == "Broken").Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MissingImport]);
+        await Assert.That(projects.Single(p => p.Name == "Broken").Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MissingImport]);
         await Assert.That(projects.Single(p => p.Name == "Fine").Blockers).IsEmpty();
         await Assert.That(projects.Single(p => p.Name == "Later").Blockers).IsEmpty();
     }
@@ -446,11 +497,16 @@ public class InventoryScenarioTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                "  <PropertyGroup>\n    <Flag>true</Flag>\n  </PropertyGroup>\n  <Import Project=\"$(VSTEST_TO_MTP_MISSING_PATH)\" Condition=\"'$(Flag)' == 'true'\" />");
+                """
+                  <PropertyGroup>
+                    <Flag>true</Flag>
+                  </PropertyGroup>
+                  <Import Project="$(VSTEST_TO_MTP_MISSING_PATH)" Condition="'$(Flag)' == 'true'" />
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
-        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.MissingImport);
+        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.MissingImport);
         await Assert.That(blocker.Location!.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "<Import Project"));
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
     }
@@ -461,10 +517,10 @@ public class InventoryScenarioTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                "  <Import Project=\"$(VSTEST_TO_MTP_MISSING_PATH)\" Condition=\"'$(VSTEST_TO_MTP_MISSING_FLAG)' == 'true'\" />");
+                """  <Import Project="$(VSTEST_TO_MTP_MISSING_PATH)" Condition="'$(VSTEST_TO_MTP_MISSING_FLAG)' == 'true'" />""");
 
         await Assert.That(workspace.Inventory("App/App.csproj").Projects.Single().Blockers.Select(b => b.Code))
-            .DoesNotContain(BlockerCodes.MissingImport);
+            .DoesNotContain(BlockerCode.MissingImport);
     }
 
     [Test]
@@ -472,13 +528,19 @@ public class InventoryScenarioTests
     {
         // IgnoreMissingImports alone would swallow an unresolved Sdk= and leave a half-evaluated project that looks complete.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("App/App.csproj", "<Project Sdk=\"Does.Not.Exist.Sdk/1.0.0\">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n  </PropertyGroup>\n</Project>");
+            .Write("App/App.csproj", """
+                <Project Sdk="Does.Not.Exist.Sdk/1.0.0">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                  </PropertyGroup>
+                </Project>
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
         InventoryBlocker blocker = project.Blockers.Single();
-        await Assert.That(blocker.Code).IsEqualTo(BlockerCodes.EvaluationFailed);
+        await Assert.That(blocker.Code).IsEqualTo(BlockerCode.EvaluationFailed);
         await Assert.That(blocker.Message).Contains("Does.Not.Exist.Sdk");
     }
 
@@ -486,14 +548,22 @@ public class InventoryScenarioTests
     public async Task CircularImport_IsReportedAsEvaluationFailure_NotAcceptedAsComplete()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("App/a.props", "<Project>\n  <Import Project=\"b.props\" />\n</Project>")
-            .Write("App/b.props", "<Project>\n  <Import Project=\"a.props\" />\n</Project>")
-            .WriteProject("App/App.csproj", "  <Import Project=\"a.props\" />");
+            .Write("App/a.props", """
+                <Project>
+                  <Import Project="b.props" />
+                </Project>
+                """)
+            .Write("App/b.props", """
+                <Project>
+                  <Import Project="a.props" />
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", """  <Import Project="a.props" />""");
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.EvaluationFailed]);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.EvaluationFailed]);
     }
 
     [Test]
@@ -501,7 +571,7 @@ public class InventoryScenarioTests
     {
         // MSBuild documents an unmatched glob as a normal, non-ignored import.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", "  <Import Project=\"*.nomatch\" />");
+            .WriteProject("App/App.csproj", """  <Import Project="*.nomatch" />""");
 
         await Assert.That(workspace.Inventory("App/App.csproj").Projects.Single().Blockers).IsEmpty();
     }
@@ -510,13 +580,22 @@ public class InventoryScenarioTests
     public async Task ImportedTwice_IsNotAnEvaluationFailure()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("App/shared.props", "<Project>\n  <PropertyGroup>\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n</Project>")
-            .WriteProject("App/App.csproj", "  <Import Project=\"shared.props\" />\n  <Import Project=\"shared.props\" />");
+            .Write("App/shared.props", """
+                <Project>
+                  <PropertyGroup>
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", """
+                  <Import Project="shared.props" />
+                  <Import Project="shared.props" />
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Production);
-        await Assert.That(project.Blockers.Select(b => b.Code)).DoesNotContain(BlockerCodes.EvaluationFailed);
+        await Assert.That(project.Blockers.Select(b => b.Code)).DoesNotContain(BlockerCode.EvaluationFailed);
         await Assert.That(project.TargetFrameworks.Single().GetProperty("IsPackable")!.Value).IsEqualTo("false");
     }
 
@@ -524,7 +603,11 @@ public class InventoryScenarioTests
     public async Task GuardedImportThatResolvesToAnEmptyPath_IsNotABlocker()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Build.props", "<Project>\n  <Import Project=\"$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))\" Condition=\"'$([MSBuild]::GetPathOfFileAbove(`Directory.Build.props`, `$(MSBuildThisFileDirectory)../`))' != ''\" />\n</Project>")
+            .Write("Directory.Build.props", """
+                <Project>
+                  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" Condition="'$([MSBuild]::GetPathOfFileAbove(`Directory.Build.props`, `$(MSBuildThisFileDirectory)../`))' != ''" />
+                </Project>
+                """)
             .WriteProject("App/App.csproj");
 
         await Assert.That(workspace.Inventory("App/App.csproj").Projects.Single().Blockers).IsEmpty();
@@ -536,8 +619,12 @@ public class InventoryScenarioTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                "  <PropertyGroup Condition=\"'$(TargetFramework)' == 'net10.0'\">\n    <IsTestProject>true</IsTestProject>\n  </PropertyGroup>",
-                "<TargetFrameworks>net10.0;net8.0</TargetFrameworks>");
+                """
+                  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+                    <IsTestProject>true</IsTestProject>
+                  </PropertyGroup>
+                """,
+                targetFrameworks: ["net10.0", "net8.0"]);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
@@ -556,13 +643,17 @@ public class InventoryScenarioTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                "  <PropertyGroup>\n    <IsTestProject>maybe</IsTestProject>\n  </PropertyGroup>\n"
-                + ScenarioWorkspace.PackageReferences("MSTest|4.0.2"));
+                $"""
+                  <PropertyGroup>
+                    <IsTestProject>maybe</IsTestProject>
+                  </PropertyGroup>
+                {ScenarioWorkspace.PackageReferences(new PackageRef("MSTest", "4.0.2"))}
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.InvalidIsTestProject);
+        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.InvalidIsTestProject);
         await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
         await Assert.That(blocker.Location!.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "<IsTestProject>"));
     }
@@ -573,10 +664,16 @@ public class InventoryScenarioTests
         // Microsoft.NET.Test.Sdk's props set IsTestProject=true for any project that references it, which would make a
         // restored production project look like a test application. Restore output is ignored, so restoring changes nothing.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("Microsoft.NET.Test.Sdk|18.0.0"));
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences(new PackageRef("Microsoft.NET.Test.Sdk", "18.0.0")));
         ProjectInventory before = workspace.Inventory("App/App.csproj").Projects.Single();
 
-        workspace.Write("App/obj/App.csproj.nuget.g.props", "<Project>\n  <PropertyGroup>\n    <IsTestProject>true</IsTestProject>\n  </PropertyGroup>\n</Project>");
+        workspace.Write("App/obj/App.csproj.nuget.g.props", """
+            <Project>
+              <PropertyGroup>
+                <IsTestProject>true</IsTestProject>
+              </PropertyGroup>
+            </Project>
+            """);
         ProjectInventory after = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(before.Classification).IsEqualTo(ProjectClassification.Production);
@@ -589,24 +686,24 @@ public class InventoryScenarioTests
     public async Task InvalidProjectFile_IsReportedAsEvaluationFailure()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>");
+            .Write("App/App.csproj", """<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>""");
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.EvaluationFailed]);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.EvaluationFailed]);
     }
 
     [Test]
     public async Task MissingTargetFramework_IsReportedAsBlocker()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", targetFramework: string.Empty);
+            .WriteProject("App/App.csproj", targetFrameworks: []);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.NoTargetFramework]);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.NoTargetFramework]);
     }
 
     [Test]
@@ -624,7 +721,7 @@ public class InventoryScenarioTests
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
-        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.IsTestProjectEarlyCondition);
+        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.IsTestProjectEarlyCondition);
         await Assert.That(blocker.Location!.File).IsEqualTo("Directory.Build.props");
         await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("Directory.Build.props", "$(IsTestProject)"));
     }
@@ -632,33 +729,55 @@ public class InventoryScenarioTests
     [Test]
     public async Task IsTestProjectCondition_InExplicitlyImportedProps_FollowsEvaluationOrder()
     {
-        const string guarded = "<Project>\n  <PropertyGroup Condition=\"'$(IsTestProject)' == 'true'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n</Project>";
-        const string assign = "  <PropertyGroup>\n    <IsTestProject>true</IsTestProject>\n  </PropertyGroup>\n";
-        const string import = "  <Import Project=\"shared.props\" />\n";
+        const string guarded = """
+            <Project>
+              <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
+                <IsPackable>false</IsPackable>
+              </PropertyGroup>
+            </Project>
+            """;
+        const string assign = """
+              <PropertyGroup>
+                <IsTestProject>true</IsTestProject>
+              </PropertyGroup>
+            """;
+        const string import = """  <Import Project="shared.props" />""";
 
         using ScenarioWorkspace before = new ScenarioWorkspace()
             .Write("App/shared.props", guarded)
-            .WriteProject("App/App.csproj", import + assign);
+            .WriteProject("App/App.csproj", $"""
+                {import}
+                {assign}
+                """);
         using ScenarioWorkspace after = new ScenarioWorkspace()
             .Write("App/shared.props", guarded)
-            .WriteProject("App/App.csproj", assign + import);
+            .WriteProject("App/App.csproj", $"""
+                {assign}
+                {import}
+                """);
 
         InventoryBlocker blocker = before.Inventory("App/App.csproj").Projects.Single().Blockers
-            .Single(b => b.Code == BlockerCodes.IsTestProjectEarlyCondition);
+            .Single(b => b.Code == BlockerCode.IsTestProjectEarlyCondition);
         await Assert.That(blocker.Location!.File).IsEqualTo("App/shared.props");
         await Assert.That(after.Inventory("App/App.csproj").Projects.Single().Blockers.Select(b => b.Code))
-            .DoesNotContain(BlockerCodes.IsTestProjectEarlyCondition);
+            .DoesNotContain(BlockerCode.IsTestProjectEarlyCondition);
     }
 
     [Test]
     public async Task IsTestProjectCondition_InImportedProps_IsFlagged_WhenNothingInTheRepositoryAssignsIt()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("App/shared.props", "<Project>\n  <PropertyGroup Condition=\"'$(IsTestProject)' == 'true'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n</Project>")
-            .WriteProject("App/App.csproj", "  <Import Project=\"shared.props\" />");
+            .Write("App/shared.props", """
+                <Project>
+                  <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", """  <Import Project="shared.props" />""");
 
         await Assert.That(workspace.Inventory("App/App.csproj").Projects.Single().Blockers.Select(b => b.Code))
-            .Contains(BlockerCodes.IsTestProjectEarlyCondition);
+            .Contains(BlockerCode.IsTestProjectEarlyCondition);
     }
 
     [Test]
@@ -683,11 +802,15 @@ public class InventoryScenarioTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                "  <PropertyGroup Condition=\"'$(VSTEST_TO_MTP_UNSET_FLAG)' == 'true'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+                """
+                  <PropertyGroup Condition="'$(VSTEST_TO_MTP_UNSET_FLAG)' == 'true'">
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
-        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.ConditionDependsOnUnsetProperty);
+        InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.ConditionDependsOnUnsetProperty);
         await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Warning);
         await Assert.That(blocker.Message).Contains("VSTEST_TO_MTP_UNSET_FLAG");
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Production);
@@ -701,7 +824,7 @@ public class InventoryScenarioTests
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.UnresolvedPackageVersion]);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.UnresolvedPackageVersion]);
         await Assert.That(project.TargetFrameworks.Single().Packages.Single().VersionSource).IsEqualTo(PackageVersionSource.None);
     }
 
@@ -713,7 +836,12 @@ public class InventoryScenarioTests
             .WriteProject("Other/Other.csproj")
             .WriteProject(
                 "App/App.csproj",
-                "  <ItemGroup>\n    <ProjectReference Include=\"..\\Core\\Core.csproj\" />\n    <ProjectReference Include=\"..\\Other\\Other.csproj\" />\n  </ItemGroup>")
+                """
+                  <ItemGroup>
+                    <ProjectReference Include="..\Core\Core.csproj" />
+                    <ProjectReference Include="..\Other\Other.csproj" />
+                  </ItemGroup>
+                """)
             .WriteSlnx("All.slnx", "App/App.csproj", "Core/Core.csproj");
 
         ProjectInventory app = workspace.Inventory("All.slnx").Projects.Single(p => p.Name == "App");
@@ -727,7 +855,10 @@ public class InventoryScenarioTests
     public async Task GlobalJson_IsParsedAndMalformedOneIsReported()
     {
         using ScenarioWorkspace good = new ScenarioWorkspace()
-            .Write("global.json", "{ // comment\n \"sdk\": { \"version\": \"10.0.100\", \"rollForward\": \"latestMajor\", }, \"test\": { \"runner\": \"Microsoft.Testing.Platform\" } }")
+            .Write("global.json", """
+                { // comment
+                 "sdk": { "version": "10.0.100", "rollForward": "latestMajor", }, "test": { "runner": "Microsoft.Testing.Platform" } }
+                """)
             .WriteProject("App/App.csproj");
 
         GlobalJsonInfo? info = good.Inventory("App/App.csproj").GlobalJson;
@@ -738,14 +869,14 @@ public class InventoryScenarioTests
         await Assert.That(info.TestRunner).IsEqualTo("Microsoft.Testing.Platform");
 
         using ScenarioWorkspace bad = new ScenarioWorkspace()
-            .Write("global.json", "{ \"sdk\": ")
+            .Write("global.json", """{ "sdk": """)
             .WriteProject("App/App.csproj");
 
         InventoryResult result = bad.Inventory("App/App.csproj");
         await Assert.That(result.GlobalJson).IsNull();
         // MSBuild's SDK resolver cannot read a malformed global.json either, so the project itself cannot be evaluated.
         await Assert.That(result.Blockers.Select(b => (b.Code, b.Project))).IsEquivalentTo(
-            [(BlockerCodes.MalformedGlobalJson, (string?)null), (BlockerCodes.EvaluationFailed, "App/App.csproj")]);
+            [(BlockerCode.MalformedGlobalJson, (string?)null), (BlockerCode.EvaluationFailed, "App/App.csproj")]);
     }
 
     [Test]
@@ -753,16 +884,33 @@ public class InventoryScenarioTests
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject("App/App.csproj")
-            .Write(".circleci/config.yml", "jobs:\n  test:\n    steps:\n      - run: dotnet test\n")
-            .Write(".gitlab-ci.yml", "test:\n  script: dotnet build\n")
-            .Write(".github/workflows/ci.yml", "steps:\n  - run: dotnet test\n")
+            .Write(".circleci/config.yml", """
+                jobs:
+                  test:
+                    steps:
+                      - run: dotnet test
+                """)
+            .Write(".gitlab-ci.yml", """
+                test:
+                  script: dotnet build
+                """)
+            .Write(".github/workflows/ci.yml", """
+                steps:
+                  - run: dotnet test
+                """)
             .Write(".github/.cache/run.sh", "dotnet test")
             .Write("scripts/huge.sh", new string('#', (2 * 1024 * 1024) + 1))
-            .Write(".github/workflows/lint.yaml", "steps:\n  - run: echo lint\n")
-            .Write("azure-pipelines.yml", "steps:\n- script: dotnet  test\n")
-            .Write("scripts/build.ps1", "dotnet build\n")
-            .Write("scripts/run.sh", "dotnet test --no-build\n")
-            .Write("Makefile", "test:\n\tdotnet test\n")
+            .Write(".github/workflows/lint.yaml", """
+                steps:
+                  - run: echo lint
+                """)
+            .Write("azure-pipelines.yml", """
+                steps:
+                - script: dotnet  test
+                """)
+            .Write("scripts/build.ps1", "dotnet build")
+            .Write("scripts/run.sh", "dotnet test --no-build")
+            .Write("Makefile", "test:\n\tdotnet test")
             .Write("App/bin/Debug/tool.ps1", "dotnet test")
             .Write("App/obj/tool.sh", "dotnet test")
             .Write(".git/hooks/pre-commit.sh", "dotnet test")
@@ -792,7 +940,16 @@ public class InventoryScenarioTests
     public async Task Inventory_IsReadOnly()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Packages.props", "<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n  <ItemGroup>\n    <PackageVersion Include=\"MSTest\" Version=\"4.0.2\" />\n  </ItemGroup>\n</Project>")
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="MSTest" Version="4.0.2" />
+                  </ItemGroup>
+                </Project>
+                """)
             .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("MSTest"))
             .WriteSlnx("All.slnx", "App/App.csproj");
         string before = Fixtures.FixtureWorkspace.ComputeHash(workspace.RootPath);

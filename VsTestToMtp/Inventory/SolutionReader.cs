@@ -25,7 +25,7 @@ internal static class SolutionReader
 
         string extension = System.IO.Path.GetExtension(fullPath).ToLowerInvariant();
         return !File.Exists(fullPath)
-            ? Failed(SelectionKind.Unknown, fullPath, BlockerCodes.SelectionNotFound,
+            ? Failed(SelectionKind.Unknown, fullPath, BlockerCode.SelectionNotFound,
                 $"'{formatter.Format(fullPath)}' does not exist.",
                 "Pass an existing .csproj, .sln or .slnx file, or a directory containing exactly one solution.", formatter)
             : ResolveFile(fullPath, extension, formatter);
@@ -37,7 +37,7 @@ internal static class SolutionReader
         {
             ".csproj" => new Selection(SelectionKind.Project, fullPath, [fullPath], []),
             ".sln" or ".slnx" => ReadSolution(fullPath, formatter),
-            _ => Failed(SelectionKind.Unknown, fullPath, BlockerCodes.UnsupportedSelection,
+            _ => Failed(SelectionKind.Unknown, fullPath, BlockerCode.UnsupportedSelection,
                 $"'{formatter.Format(fullPath)}' is not a C# project or solution file.",
                 "Pass a .csproj, .sln or .slnx file.", formatter),
         };
@@ -51,7 +51,7 @@ internal static class SolutionReader
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return Failed(SelectionKind.Directory, directory, BlockerCodes.UnreadableDirectory,
+            return Failed(SelectionKind.Directory, directory, BlockerCode.UnreadableDirectory,
                 $"'{formatter.Format(directory)}' could not be listed: {ex.Message}",
                 "Grant read access to the directory, or pass the solution or project file directly.", formatter);
         }
@@ -73,7 +73,7 @@ internal static class SolutionReader
 
         if (solutions.Length > 1)
         {
-            return Failed(SelectionKind.Directory, directory, BlockerCodes.AmbiguousSelection,
+            return Failed(SelectionKind.Directory, directory, BlockerCode.AmbiguousSelection,
                 $"'{formatter.Format(directory)}' contains several solutions: {string.Join(", ", solutions.Select(s => System.IO.Path.GetFileName(s)))}.",
                 "Pass the solution file you want to inventory.", formatter, [.. solutions.Select(s => formatter.Location(s))]);
         }
@@ -81,7 +81,7 @@ internal static class SolutionReader
         string[] projects = [.. files.Where(f => HasExtension(f, ".csproj"))];
         return projects.Length == 1
             ? new Selection(SelectionKind.Project, projects[0], [projects[0]], [])
-            : Failed(SelectionKind.Directory, directory, BlockerCodes.AmbiguousSelection,
+            : Failed(SelectionKind.Directory, directory, BlockerCode.AmbiguousSelection,
                 $"'{formatter.Format(directory)}' contains no single solution or project.",
                 "Pass a .csproj, .sln or .slnx file.", formatter);
     }
@@ -110,7 +110,7 @@ internal static class SolutionReader
                 if (!string.Equals(extension, ".csproj", StringComparison.OrdinalIgnoreCase))
                 {
                     blockers.Add(new InventoryBlocker(
-                        BlockerCodes.UnsupportedProjectLanguage, BlockerSeverity.Info,
+                        BlockerCode.UnsupportedProjectLanguage, BlockerSeverity.Info,
                         $"'{formatter.Format(projectPath)}' is not a C# project and is skipped.",
                         "Only SDK-style C# (.csproj) projects are inventoried.",
                         formatter.Format(projectPath), formatter.Location(solutionPath)));
@@ -118,7 +118,7 @@ internal static class SolutionReader
                 else if (!File.Exists(projectPath))
                 {
                     blockers.Add(new InventoryBlocker(
-                        BlockerCodes.MissingProject, BlockerSeverity.Error,
+                        BlockerCode.MissingProject, BlockerSeverity.Error,
                         $"The solution lists '{formatter.Format(projectPath)}', which does not exist.",
                         "Restore the project file or remove it from the solution, then rerun.",
                         formatter.Format(projectPath), formatter.Location(solutionPath)));
@@ -132,7 +132,7 @@ internal static class SolutionReader
         catch (Exception ex) when (ex is SolutionException or IOException or UnauthorizedAccessException)
         {
             blockers.Add(new InventoryBlocker(
-                BlockerCodes.MalformedSolution, BlockerSeverity.Error,
+                BlockerCode.MalformedSolution, BlockerSeverity.Error,
                 $"'{formatter.Format(solutionPath)}' could not be read: {ex.Message}",
                 "Fix or regenerate the solution file, then rerun.",
                 null, formatter.Location(solutionPath)));
@@ -143,6 +143,6 @@ internal static class SolutionReader
     }
 
     private static Selection Failed(
-        SelectionKind kind, string path, string code, string message, string remediation, PathFormatter formatter, IReadOnlyList<SourceLocation>? related = null) =>
+        SelectionKind kind, string path, BlockerCode code, string message, string remediation, PathFormatter formatter, IReadOnlyList<SourceLocation>? related = null) =>
         new(kind, path, [], [new InventoryBlocker(code, BlockerSeverity.Error, message, remediation, null, formatter.Location(path)) { RelatedLocations = related ?? [] }]);
 }

@@ -9,11 +9,11 @@ internal sealed record EvaluatedProject(
 {
     // Errors that mean MSBuild's picture of the project is incomplete. Other errors (for example a declaration NuGet would reject)
     // do not stop the project from being evaluated, so they must not stop it from being classified.
-    private static readonly HashSet<string> IncompleteEvaluationCodes =
+    private static readonly HashSet<BlockerCode> IncompleteEvaluationCodes =
     [
-        BlockerCodes.EvaluationFailed,
-        BlockerCodes.MissingImport,
-        BlockerCodes.NoTargetFramework,
+        BlockerCode.EvaluationFailed,
+        BlockerCode.MissingImport,
+        BlockerCode.NoTargetFramework,
     ];
 
     /// <summary>Whether evaluation was incomplete in a way that makes classification a guess.</summary>

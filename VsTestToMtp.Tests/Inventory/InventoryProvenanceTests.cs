@@ -10,7 +10,7 @@ using VsTestToMtp.Inventory;
 [NotInParallel("MSBuildEvaluation")]
 public class InventoryProvenanceTests
 {
-    private const string MultiTarget = "<TargetFrameworks>net10.0;net8.0</TargetFrameworks>";
+    private static readonly string[] MultiTarget = ["net10.0", "net8.0"];
 
     [Test]
     public async Task ProjectReferences_AreReportedPerTargetFramework()
@@ -28,7 +28,7 @@ public class InventoryProvenanceTests
                     <ProjectReference Include="..\Legacy\Legacy.csproj" />
                   </ItemGroup>
                 """,
-                MultiTarget)
+                targetFrameworks: MultiTarget)
             .WriteSlnx("All.slnx", "App/App.csproj", "Core/Core.csproj");
 
         ProjectInventory app = workspace.Inventory("All.slnx").Projects.Single(p => p.Name == "App");
@@ -47,11 +47,17 @@ public class InventoryProvenanceTests
     public async Task ImportConditionedOnTargetFramework_IsRecordedWithItsImportChain()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("App/net10.props", "<Project>\n  <PropertyGroup>\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n</Project>")
+            .Write("App/net10.props", """
+                <Project>
+                  <PropertyGroup>
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                </Project>
+                """)
             .WriteProject(
                 "App/App.csproj",
-                "  <Import Project=\"net10.props\" Condition=\"'$(TargetFramework)' == 'net10.0'\" />",
-                MultiTarget);
+                """  <Import Project="net10.props" Condition="'$(TargetFramework)' == 'net10.0'" />""",
+                targetFrameworks: MultiTarget);
 
         ProjectInventory app = workspace.Inventory("App/App.csproj").Projects.Single();
 
@@ -94,8 +100,14 @@ public class InventoryProvenanceTests
                   </packageSources>
                 </configuration>
                 """)
-            .WriteProject("App/App.csproj", "  <Sdk Name=\"Local.Test.Sdk\" Version=\"1.0.0\" />");
-        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", "<Project>\n  <PropertyGroup>\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n</Project>");
+            .WriteProject("App/App.csproj", """  <Sdk Name="Local.Test.Sdk" Version="1.0.0" />""");
+        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", """
+            <Project>
+              <PropertyGroup>
+                <IsPackable>false</IsPackable>
+              </PropertyGroup>
+            </Project>
+            """);
 
         ProjectInventory app = workspace.Inventory("App/App.csproj").Projects.Single();
 
@@ -190,7 +202,13 @@ public class InventoryProvenanceTests
     {
         // NuGet ignores PackageVersion items unless ManagePackageVersionsCentrally is true.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Packages.props", "<Project>\n  <ItemGroup>\n    <PackageVersion Include=\"NUnit\" Version=\"4.3.2\" />\n  </ItemGroup>\n</Project>")
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
             .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("NUnit"));
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
@@ -198,7 +216,7 @@ public class InventoryProvenanceTests
         PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
         await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
         await Assert.That(nunit.Version).IsNull();
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.UnresolvedPackageVersion]);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.UnresolvedPackageVersion]);
     }
 
     [Test]
@@ -220,19 +238,23 @@ public class InventoryProvenanceTests
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
-        InventoryBlocker duplicate = project.Blockers.Single(b => b.Code == BlockerCodes.DuplicatePackageVersion);
+        InventoryBlocker duplicate = project.Blockers.Single(b => b.Code == BlockerCode.DuplicatePackageVersion);
         await Assert.That(duplicate.RelatedLocations.Select(l => (l.File, l.Line))).IsEquivalentTo(
             [("Directory.Packages.props", workspace.LineOf("Directory.Packages.props", "4.0.0")), ("Directory.Packages.props", workspace.LineOf("Directory.Packages.props", "4.3.2"))],
             CollectionOrdering.Matching);
         await Assert.That(project.TargetFrameworks.Single().Packages.Single().VersionSource).IsEqualTo(PackageVersionSource.None);
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.DuplicatePackageVersion, BlockerCodes.UnresolvedPackageVersion]);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.DuplicatePackageVersion, BlockerCode.UnresolvedPackageVersion]);
     }
 
     [Test]
     public async Task VersionOverride_IsIgnored_WhenCentralPackageManagementIsOff()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", "  <ItemGroup>\n    <PackageReference Include=\"NUnit\" VersionOverride=\"4.0.0\" />\n  </ItemGroup>");
+            .WriteProject("App/App.csproj", """
+                  <ItemGroup>
+                    <PackageReference Include="NUnit" VersionOverride="4.0.0" />
+                  </ItemGroup>
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
@@ -240,21 +262,25 @@ public class InventoryProvenanceTests
         await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
         await Assert.That(nunit.Version).IsNull();
         await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo(
-            [BlockerCodes.IneffectiveVersionOverride, BlockerCodes.UnresolvedPackageVersion]);
+            [BlockerCode.IneffectiveVersionOverride, BlockerCode.UnresolvedPackageVersion]);
     }
 
     [Test]
     public async Task VersionOverride_NextToAnInlineVersion_WithoutCentralPackageManagement_LeavesTheInlineVersionEffective()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", "  <ItemGroup>\n    <PackageReference Include=\"NUnit\" Version=\"4.3.2\" VersionOverride=\"4.0.0\" />\n  </ItemGroup>");
+            .WriteProject("App/App.csproj", """
+                  <ItemGroup>
+                    <PackageReference Include="NUnit" Version="4.3.2" VersionOverride="4.0.0" />
+                  </ItemGroup>
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
         await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.Inline);
         await Assert.That(nunit.Version).IsEqualTo("4.3.2");
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.IneffectiveVersionOverride]);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.IneffectiveVersionOverride]);
     }
 
     [Test]
@@ -273,7 +299,11 @@ public class InventoryProvenanceTests
                   </ItemGroup>
                 </Project>
                 """)
-            .WriteProject("App/App.csproj", "  <ItemGroup>\n    <PackageReference Include=\"NUnit\" VersionOverride=\"4.0.0\" />\n  </ItemGroup>");
+            .WriteProject("App/App.csproj", """
+                  <ItemGroup>
+                    <PackageReference Include="NUnit" VersionOverride="4.0.0" />
+                  </ItemGroup>
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
@@ -281,7 +311,7 @@ public class InventoryProvenanceTests
         await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
         await Assert.That(nunit.Version).IsNull();
         InventoryBlocker blocker = project.Blockers.Single();
-        await Assert.That(blocker.Code).IsEqualTo(BlockerCodes.IneffectiveVersionOverride);
+        await Assert.That(blocker.Code).IsEqualTo(BlockerCode.IneffectiveVersionOverride);
         await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
     }
 
@@ -296,7 +326,16 @@ public class InventoryProvenanceTests
         // NuGet.targets compares the property with == 'true' (an MSBuild boolean comparison, so yes/!false count but a padded
         // value does not), and restore then reads the result literally.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Packages.props", $"<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>{value}</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n  <ItemGroup>\n    <PackageVersion Include=\"NUnit\" Version=\"4.3.2\" />\n  </ItemGroup>\n</Project>")
+            .Write("Directory.Packages.props", $"""
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>{value}</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
             .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("NUnit"));
 
         PackageReferenceState nunit = workspace.Inventory("App/App.csproj").Projects.Single().TargetFrameworks.Single().Packages.Single();
@@ -312,15 +351,21 @@ public class InventoryProvenanceTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                "  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n"
-                + "  <ItemGroup>\n    <PackageVersion Include=\"NUnit\" Version=\"4.3.2\" />\n  </ItemGroup>\n"
-                + ScenarioWorkspace.PackageReferences("NUnit"));
+                $"""
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                {ScenarioWorkspace.PackageReferences("NUnit")}
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
         await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.UnresolvedPackageVersion]);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.UnresolvedPackageVersion]);
     }
 
     [Test]
@@ -330,8 +375,22 @@ public class InventoryProvenanceTests
     {
         // NuGet disables overrides only for the literal (trimmed) "false"; other MSBuild false spellings leave them enabled.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Packages.props", $"<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n    <CentralPackageVersionOverrideEnabled>{value}</CentralPackageVersionOverrideEnabled>\n  </PropertyGroup>\n  <ItemGroup>\n    <PackageVersion Include=\"NUnit\" Version=\"4.3.2\" />\n  </ItemGroup>\n</Project>")
-            .WriteProject("App/App.csproj", "  <ItemGroup>\n    <PackageReference Include=\"NUnit\" VersionOverride=\"4.0.0\" />\n  </ItemGroup>");
+            .Write("Directory.Packages.props", $"""
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                    <CentralPackageVersionOverrideEnabled>{value}</CentralPackageVersionOverrideEnabled>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", """
+                  <ItemGroup>
+                    <PackageReference Include="NUnit" VersionOverride="4.0.0" />
+                  </ItemGroup>
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
@@ -346,8 +405,17 @@ public class InventoryProvenanceTests
     {
         // NU1008: a PackageReference must not carry Version when central management is on.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Packages.props", "<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n  <ItemGroup>\n    <PackageVersion Include=\"MSTest\" Version=\"4.0.2\" />\n  </ItemGroup>\n</Project>")
-            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("MSTest|4.0.2"));
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="MSTest" Version="4.0.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences(new PackageRef("MSTest", "4.0.2")));
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
@@ -355,7 +423,7 @@ public class InventoryProvenanceTests
         await Assert.That(mstest.VersionSource).IsEqualTo(PackageVersionSource.None);
         await Assert.That(mstest.Version).IsNull();
         InventoryBlocker blocker = project.Blockers.Single();
-        await Assert.That(blocker.Code).IsEqualTo(BlockerCodes.InlineVersionUnderCentralManagement);
+        await Assert.That(blocker.Code).IsEqualTo(BlockerCode.InlineVersionUnderCentralManagement);
         await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
         await Assert.That(blocker.Location!.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "Include=\"MSTest\""));
 
@@ -367,7 +435,16 @@ public class InventoryProvenanceTests
     public async Task GlobalPackageReferenceVersion_UnderCentralPackageManagement_IsValid()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Packages.props", "<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n  <ItemGroup>\n    <GlobalPackageReference Include=\"Some.Analyzer\" Version=\"1.2.3\" />\n  </ItemGroup>\n</Project>")
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <GlobalPackageReference Include="Some.Analyzer" Version="1.2.3" />
+                  </ItemGroup>
+                </Project>
+                """)
             .WriteProject("App/App.csproj");
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
@@ -385,8 +462,12 @@ public class InventoryProvenanceTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "Tool/Tool.csproj",
-                "  <PropertyGroup>\n    <isTestProject>false</isTestProject>\n  </PropertyGroup>\n"
-                + ScenarioWorkspace.PackageReferences("MSTest|4.0.2"));
+                $"""
+                  <PropertyGroup>
+                    <isTestProject>false</isTestProject>
+                  </PropertyGroup>
+                {ScenarioWorkspace.PackageReferences(new PackageRef("MSTest", "4.0.2"))}
+                """);
 
         ProjectInventory project = workspace.Inventory("Tool/Tool.csproj").Projects.Single();
 
@@ -403,10 +484,14 @@ public class InventoryProvenanceTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                "  <ItemGroup Condition=\"'$(VSTEST_TO_MTP_UNSET_FLAG)' == 'true'\">\n    <packagereference Include=\"NUnit\" Version=\"4.3.2\" />\n  </ItemGroup>");
+                """
+                  <ItemGroup Condition="'$(VSTEST_TO_MTP_UNSET_FLAG)' == 'true'">
+                    <packagereference Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                """);
 
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnUnsetProperty]);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.ConditionDependsOnUnsetProperty]);
     }
 }

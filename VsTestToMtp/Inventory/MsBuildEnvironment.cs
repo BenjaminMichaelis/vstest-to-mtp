@@ -97,7 +97,7 @@ internal static class MsBuildEnvironment
             return registered is not null && PathComparison.Equal(registered, instance.MSBuildPath)
                 ? null
                 : Blocker(
-                    BlockerCodes.MsBuildSdkMismatch,
+                    BlockerCode.MsBuildSdkMismatch,
                     registered is null
                         ? $"Another component already registered MSBuild in this process and its SDK cannot be determined, so it cannot be verified to match '{instance.MSBuildPath}' for this selection."
                         : $"This process already loaded MSBuild from '{registered}', but this selection resolves to '{instance.MSBuildPath}' "
@@ -112,7 +112,7 @@ internal static class MsBuildEnvironment
         if (sdk.Major < MinimumSdkMajorVersion)
         {
             return Blocker(
-                BlockerCodes.MsBuildSdkUnsupported,
+                BlockerCode.MsBuildSdkUnsupported,
                 $"This selection resolves to .NET SDK {sdk}, which is older than the oldest supported SDK ({MinimumSdkMajorVersion}.0); its MSBuild cannot be loaded safely.",
                 $"Use a global.json that selects .NET SDK {MinimumSdkMajorVersion}.0 or newer (the repository can be migrated with a newer SDK even if it targets older frameworks), then rerun.");
         }
@@ -121,17 +121,17 @@ internal static class MsBuildEnvironment
         bool newerThanRuntime = sdk.Major > runtime.Major || (sdk.Major == runtime.Major && sdk.Minor > runtime.Minor);
         return newerThanRuntime
             ? Blocker(
-                BlockerCodes.MsBuildSdkNewerThanRuntime,
+                BlockerCode.MsBuildSdkNewerThanRuntime,
                 $"This selection resolves to .NET SDK {sdk}, whose MSBuild needs a newer .NET runtime than the {runtime.Major}.{runtime.Minor} runtime vstest-to-mtp runs on.",
                 $"Use a vstest-to-mtp release built for .NET {sdk.Major}.{sdk.Minor} or later, or a global.json that selects an SDK no newer than {runtime.Major}.{runtime.Minor}, then rerun.")
             : null;
     }
 
     private static InventoryBlocker NotFound(string error) => Blocker(
-        BlockerCodes.MsBuildNotFound,
+        BlockerCode.MsBuildNotFound,
         $"MSBuild could not be located: {error}",
         "Install the .NET SDK that the repository's global.json selects, then rerun.");
 
-    private static InventoryBlocker Blocker(string code, string message, string remediation) =>
+    private static InventoryBlocker Blocker(BlockerCode code, string message, string remediation) =>
         new(code, BlockerSeverity.Error, message, remediation, null, null);
 }

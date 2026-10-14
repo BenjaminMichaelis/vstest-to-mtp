@@ -33,7 +33,7 @@ internal static class TestProjectClassifier
         {
             string summary = string.Join(", ", states.Select(s => $"{s.TargetFramework}: {s.Classification}"));
             blockers.Add(new InventoryBlocker(
-                BlockerCodes.TargetFrameworkClassificationDiffers, BlockerSeverity.Error,
+                BlockerCode.TargetFrameworkClassificationDiffers, BlockerSeverity.Error,
                 $"Target frameworks classify differently ({summary}).",
                 "Decide per target framework whether this is a test application, or make the test packages and IsTestProject consistent across target frameworks.",
                 evaluated.Path, null));
@@ -75,7 +75,7 @@ internal static class TestProjectClassifier
         {
             // The explicit property is authoritative, so a value that is not a boolean makes the classification undeterminable.
             blockers.Add(new InventoryBlocker(
-                BlockerCodes.InvalidIsTestProject, BlockerSeverity.Error,
+                BlockerCode.InvalidIsTestProject, BlockerSeverity.Error,
                 $"IsTestProject evaluates to '{isTestProject.Value}' for {framework.TargetFramework}, which is not a boolean.",
                 "Set IsTestProject to true or false (check for a property that expands to something else), then rerun.",
                 project, isTestProject.Definition?.Location));
@@ -104,7 +104,7 @@ internal static class TestProjectClassifier
         if (anyFramework && anyRunner)
         {
             blockers.Add(new InventoryBlocker(
-                BlockerCodes.TestEvidenceOnlyFromImports, BlockerSeverity.Warning,
+                BlockerCode.TestEvidenceOnlyFromImports, BlockerSeverity.Warning,
                 $"Test framework and runner packages are only complete because of packages declared outside '{project}', so it is not treated as a test application.",
                 "Set IsTestProject=true in the test project, or declare its test framework and runner packages in the project file.",
                 project, null));

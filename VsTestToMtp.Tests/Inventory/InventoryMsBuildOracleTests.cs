@@ -35,7 +35,14 @@ public class InventoryMsBuildOracleTests
     {
         // The oracle: a condition in boolean context makes MSBuild itself decide whether the value is true, false or invalid.
         using ScenarioWorkspace oracle = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", $"  <PropertyGroup>\n    <IsTestProject>{value}</IsTestProject>\n  </PropertyGroup>\n  <PropertyGroup Condition=\"$(IsTestProject)\">\n    <OutputType>OracleSaysTrue</OutputType>\n  </PropertyGroup>");
+            .WriteProject("App/App.csproj", $"""
+                  <PropertyGroup>
+                    <IsTestProject>{value}</IsTestProject>
+                  </PropertyGroup>
+                  <PropertyGroup Condition="$(IsTestProject)">
+                    <OutputType>OracleSaysTrue</OutputType>
+                  </PropertyGroup>
+                """);
         ProjectInventory evaluated = oracle.Inventory("App/App.csproj").Projects.Single();
 
         // The inventory reports OutputType and the SDK never sets it to this value, so only the oracle condition can.
@@ -44,7 +51,11 @@ public class InventoryMsBuildOracleTests
             : evaluated.TargetFrameworks.Single().GetProperty("OutputType")!.Value == "OracleSaysTrue";
 
         using ScenarioWorkspace plain = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", $"  <PropertyGroup>\n    <IsTestProject>{value}</IsTestProject>\n  </PropertyGroup>");
+            .WriteProject("App/App.csproj", $"""
+                  <PropertyGroup>
+                    <IsTestProject>{value}</IsTestProject>
+                  </PropertyGroup>
+                """);
         ProjectInventory classified = plain.Inventory("App/App.csproj").Projects.Single();
 
         switch (msBuildSaysTrue)
@@ -59,7 +70,7 @@ public class InventoryMsBuildOracleTests
                 // MSBuild rejects the value (MSB4113), so the classification must be undeterminable, not guessed.
                 await Assert.That(evaluated.Blockers.Select(b => b.Message)).Contains(m => m.Contains("MSB4113"));
                 await Assert.That(classified.Classification).IsEqualTo(ProjectClassification.Unknown);
-                await Assert.That(classified.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.InvalidIsTestProject]);
+                await Assert.That(classified.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.InvalidIsTestProject]);
                 break;
         }
     }

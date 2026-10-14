@@ -32,19 +32,40 @@ public sealed class ScenarioWorkspace : IDisposable
         return this;
     }
 
-    /// <summary>Writes an SDK-style project; <paramref name="body"/> is placed after the target framework property group.</summary>
-    public ScenarioWorkspace WriteProject(string relativePath, string body = "", string targetFramework = "<TargetFramework>net10.0</TargetFramework>") =>
+    /// <summary>
+    /// Writes an SDK-style project; <paramref name="body"/> is placed after the target framework property group.
+    /// <paramref name="targetFrameworks"/> defaults to net10.0; one name sets TargetFramework, several set TargetFrameworks,
+    /// and an empty array sets neither.
+    /// </summary>
+    public ScenarioWorkspace WriteProject(string relativePath, string body = "", string[]? targetFrameworks = null) =>
         Write(relativePath, $"""
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                {targetFramework}
+                {TargetFrameworkElement(targetFrameworks)}
               </PropertyGroup>
             {body}
             </Project>
             """);
 
-    public ScenarioWorkspace WriteSlnx(string relativePath, params string[] projects) =>
-        Write(relativePath, $"<Solution>\n  <Folder Name=\"/all/\">\n{string.Join("\n", projects.Select(p => $"    <Project Path=\"{p}\" />"))}\n  </Folder>\n</Solution>\n");
+    private static string TargetFrameworkElement(string[]? targetFrameworks) => targetFrameworks switch
+    {
+        null => "<TargetFramework>net10.0</TargetFramework>",
+        [] => string.Empty,
+        [var single] => $"<TargetFramework>{single}</TargetFramework>",
+        _ => $"<TargetFrameworks>{string.Join(';', targetFrameworks)}</TargetFrameworks>",
+    };
+
+    public ScenarioWorkspace WriteSlnx(string relativePath, params string[] projects)
+    {
+        string entries = string.Join("\n", projects.Select(p => $"""    <Project Path="{p}" />"""));
+        return Write(relativePath, $"""
+            <Solution>
+              <Folder Name="/all/">
+            {entries}
+              </Folder>
+            </Solution>
+            """);
+    }
 
     /// <summary>
     /// The 1-based line of the <paramref name="occurrence"/>th line of <paramref name="relativePath"/> containing
@@ -68,10 +89,17 @@ public sealed class ScenarioWorkspace : IDisposable
     public InventoryResult Inventory(string selection) =>
         InventoryBuilder.Build(PathOf(selection), new InventoryOptions(RootPath));
 
-    public static string PackageReferences(params string[] packages) =>
-        "  <ItemGroup>\n" + string.Join("\n", packages.Select(p => p.Contains('|')
-            ? $"    <PackageReference Include=\"{p.Split('|')[0]}\" Version=\"{p.Split('|')[1]}\" />"
-            : $"    <PackageReference Include=\"{p}\" />")) + "\n  </ItemGroup>";
+    public static string PackageReferences(params PackageRef[] packages)
+    {
+        string references = string.Join("\n", packages.Select(p => p.Version is null
+            ? $"""    <PackageReference Include="{p.Name}" />"""
+            : $"""    <PackageReference Include="{p.Name}" Version="{p.Version}" />"""));
+        return $"""
+              <ItemGroup>
+            {references}
+              </ItemGroup>
+            """;
+    }
 
     public void Dispose()
     {
@@ -80,4 +108,10 @@ public sealed class ScenarioWorkspace : IDisposable
             Directory.Delete(RootPath, recursive: true);
         }
     }
+}
+
+/// <summary>A <c>PackageReference</c> to write into a scenario project; <paramref name="Version"/> is omitted when it comes from elsewhere (central management).</summary>
+public readonly record struct PackageRef(string Name, string? Version = null)
+{
+    public static implicit operator PackageRef(string name) => new(name);
 }

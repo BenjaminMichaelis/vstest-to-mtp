@@ -61,7 +61,7 @@ internal static partial class RepositoryScanner
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 blockers.Add(new InventoryBlocker(
-                    BlockerCodes.UnreadableGlobalJson, BlockerSeverity.Error,
+                    BlockerCode.UnreadableGlobalJson, BlockerSeverity.Error,
                     $"'{formatter.Format(path)}' could not be read: {ex.Message}",
                     "Grant read access to global.json (or fix the path), then rerun, so the SDK and test runner configuration can be read.",
                     null, formatter.Location(path)));
@@ -70,7 +70,7 @@ internal static partial class RepositoryScanner
             catch (JsonException ex)
             {
                 blockers.Add(new InventoryBlocker(
-                    BlockerCodes.MalformedGlobalJson, BlockerSeverity.Error,
+                    BlockerCode.MalformedGlobalJson, BlockerSeverity.Error,
                     $"'{formatter.Format(path)}' is not valid JSON: {ex.Message}",
                     "Fix global.json so the SDK and test runner configuration can be read.",
                     null, formatter.Location(path, (int)(ex.LineNumber ?? 0) + 1, (int)(ex.BytePositionInLine ?? 0) + 1)));
@@ -125,7 +125,7 @@ internal static partial class RepositoryScanner
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             blockers.Add(new InventoryBlocker(
-                BlockerCodes.UnreadableDirectory, BlockerSeverity.Warning,
+                BlockerCode.UnreadableDirectory, BlockerSeverity.Warning,
                 $"'{formatter.Format(directory)}' could not be scanned for CI definitions and scripts: {ex.Message}",
                 "Grant read access (or remove the directory), then rerun. Automation files under it are not listed.",
                 null, formatter.Location(directory)));

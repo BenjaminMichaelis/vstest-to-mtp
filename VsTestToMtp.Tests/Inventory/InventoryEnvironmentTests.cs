@@ -16,7 +16,7 @@ public class InventoryEnvironmentTests
     public async Task UnsatisfiableGlobalJson_IsReportedAsMsBuildNotFound_AndDoesNotPoisonLaterSelections()
     {
         using ScenarioWorkspace broken = new ScenarioWorkspace()
-            .Write("global.json", "{ \"sdk\": { \"version\": \"99.0.100\", \"rollForward\": \"disable\" } }")
+            .Write("global.json", """{ "sdk": { "version": "99.0.100", "rollForward": "disable" } }""")
             .WriteProject("App/App.csproj");
         using ScenarioWorkspace healthy = new ScenarioWorkspace()
             .WriteProject("App/App.csproj");
@@ -25,7 +25,7 @@ public class InventoryEnvironmentTests
         ProjectInventory ok = healthy.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(failed.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(failed.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MsBuildNotFound]);
+        await Assert.That(failed.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildNotFound]);
         await Assert.That(ok.Classification).IsEqualTo(ProjectClassification.Production);
         await Assert.That(ok.Blockers).IsEmpty();
     }
@@ -54,7 +54,7 @@ public class InventoryEnvironmentTests
 
         await Assert.That(refused.Classification).IsEqualTo(ProjectClassification.Unknown);
         InventoryBlocker blocker = refused.Blockers.Single();
-        await Assert.That(blocker.Code).IsEqualTo(BlockerCodes.MsBuildSdkMismatch);
+        await Assert.That(blocker.Code).IsEqualTo(BlockerCode.MsBuildSdkMismatch);
         await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
     }
 
@@ -76,12 +76,12 @@ public class InventoryEnvironmentTests
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MsBuildSdkNewerThanRuntime]);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildSdkNewerThanRuntime]);
     }
 
     private const int MinimumSdkMajorVersion = 8;
 
-    private static string Pin(Version sdk) => $"{{ \"sdk\": {{ \"version\": \"{sdk}\", \"rollForward\": \"disable\" }} }}";
+    private static string Pin(Version sdk) => $$"""{ "sdk": { "version": "{{sdk}}", "rollForward": "disable" } }""";
 
     // Same rule MSBuildLocator applies by default: an SDK's MSBuild needs at least the runtime it shipped with.
     private static bool IsNewerThanRuntime(Version sdk) =>
@@ -113,7 +113,7 @@ public class InventoryEnvironmentTests
 
             await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.Production);
             await Assert.That(result.Automation.Select(a => a.Path)).IsEquivalentTo(["scripts/build.ps1"]);
-            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCodes.UnreadableDirectory);
+            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCode.UnreadableDirectory);
             await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Warning);
             await Assert.That(blocker.Location!.File).IsEqualTo("locked");
             await Assert.That(blocker.Remediation).IsNotEmpty();
@@ -134,7 +134,7 @@ public class InventoryEnvironmentTests
         }
 
         using ScenarioWorkspace old = new ScenarioWorkspace()
-            .Write("global.json", $"{{ \"sdk\": {{ \"version\": \"{tooOld.Version}\", \"rollForward\": \"disable\" }} }}")
+            .Write("global.json", $$"""{ "sdk": { "version": "{{tooOld.Version}}", "rollForward": "disable" } }""")
             .WriteProject("App/App.csproj");
         using ScenarioWorkspace current = new ScenarioWorkspace().WriteProject("App/App.csproj");
 
@@ -142,7 +142,7 @@ public class InventoryEnvironmentTests
         ProjectInventory ok = current.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(rejected.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(rejected.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCodes.MsBuildSdkUnsupported]);
+        await Assert.That(rejected.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildSdkUnsupported]);
         // Rejecting it must not have registered (and so poisoned) MSBuild for later selections.
         await Assert.That(ok.Blockers).IsEmpty();
     }
@@ -159,7 +159,7 @@ public class InventoryEnvironmentTests
             InventoryResult result = InventoryBuilder.Build(workspace.PathOf("sub"), new InventoryOptions(workspace.RootPath));
 
             await Assert.That(result.Projects).IsEmpty();
-            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCodes.UnreadableDirectory && b.Severity == BlockerSeverity.Error);
+            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCode.UnreadableDirectory && b.Severity == BlockerSeverity.Error);
             await Assert.That(blocker.Location!.File).IsEqualTo("sub");
             await Assert.That(blocker.Remediation).IsNotEmpty();
         }
@@ -177,7 +177,7 @@ public class InventoryEnvironmentTests
             ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
             await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-            InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCodes.EvaluationFailed);
+            InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.EvaluationFailed);
             await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
             await Assert.That(blocker.Location!.File).IsEqualTo("App/App.csproj");
         }
@@ -196,7 +196,7 @@ public class InventoryEnvironmentTests
             InventoryResult result = workspace.Inventory("All.slnx");
 
             await Assert.That(result.Projects).IsEmpty();
-            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCodes.MalformedSolution);
+            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCode.MalformedSolution);
             await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
             await Assert.That(blocker.Location!.File).IsEqualTo("All.slnx");
         }
@@ -207,7 +207,7 @@ public class InventoryEnvironmentTests
     public async Task UnreadableGlobalJson_IsReportedAsBlocker_InsteadOfThrowing()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("global.json", "{ \"sdk\": { \"version\": \"10.0.100\" } }")
+            .Write("global.json", """{ "sdk": { "version": "10.0.100" } }""")
             .WriteProject("App/App.csproj");
 
         using (Lock(workspace.PathOf("global.json")))
@@ -215,7 +215,7 @@ public class InventoryEnvironmentTests
             InventoryResult result = workspace.Inventory("App/App.csproj");
 
             await Assert.That(result.GlobalJson).IsNull();
-            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCodes.UnreadableGlobalJson);
+            InventoryBlocker blocker = result.Blockers.Single(b => b.Code == BlockerCode.UnreadableGlobalJson);
             await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
             await Assert.That(blocker.Location!.File).IsEqualTo("global.json");
         }
@@ -228,7 +228,11 @@ public class InventoryEnvironmentTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject("A/A.csproj")
             .WriteProject("a/a.csproj")
-            .WriteProject("App/App.csproj", "  <ItemGroup>\n    <ProjectReference Include=\"../a/a.csproj\" />\n  </ItemGroup>")
+            .WriteProject("App/App.csproj", """
+                  <ItemGroup>
+                    <ProjectReference Include="../a/a.csproj" />
+                  </ItemGroup>
+                """)
             .WriteSlnx("All.slnx", "App/App.csproj", "A/A.csproj");
 
         ProjectInventory app = workspace.Inventory("All.slnx").Projects.Single(p => p.Name == "App");

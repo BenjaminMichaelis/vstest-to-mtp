@@ -44,7 +44,7 @@ internal sealed class PackageVersionResolver
             // NuGet reports NU1506 here because restore is inconsistent; do not pick a winner.
             Provenance[] definitions = [.. group.Select(v => resolver.Provenance(v.Xml))];
             blockers.Add(new InventoryBlocker(
-                BlockerCodes.DuplicatePackageVersion, BlockerSeverity.Warning,
+                BlockerCode.DuplicatePackageVersion, BlockerSeverity.Warning,
                 $"PackageVersion '{group.Key}' is declared {definitions.Length} times ({string.Join(", ", definitions.Select(d => d.Location))}), so its central version is ambiguous.",
                 "Keep one PackageVersion per package (use Update to change a version declared elsewhere).",
                 displayPath, definitions[^1].Location)
@@ -69,12 +69,12 @@ internal sealed class PackageVersionResolver
             // simply not a version source, which leaves the reference unversioned.
             Add(_centralManagement
                 ? new InventoryBlocker(
-                    BlockerCodes.IneffectiveVersionOverride, BlockerSeverity.Error,
+                    BlockerCode.IneffectiveVersionOverride, BlockerSeverity.Error,
                     $"PackageReference '{name}' sets VersionOverride while CentralPackageVersionOverrideEnabled is false, which NuGet rejects (NU1013).",
                     "Remove VersionOverride, or enable version overrides (CentralPackageVersionOverrideEnabled).",
                     _displayPath, definition.Location)
                 : new InventoryBlocker(
-                    BlockerCodes.IneffectiveVersionOverride, BlockerSeverity.Warning,
+                    BlockerCode.IneffectiveVersionOverride, BlockerSeverity.Warning,
                     $"PackageReference '{name}' sets VersionOverride, which has no effect unless Central Package Management is on.",
                     "Enable Central Package Management, or use Version instead of VersionOverride.",
                     _displayPath, definition.Location));
@@ -87,7 +87,7 @@ internal sealed class PackageVersionResolver
             if (userOwned)
             {
                 Add(new InventoryBlocker(
-                    BlockerCodes.InlineVersionUnderCentralManagement, BlockerSeverity.Error,
+                    BlockerCode.InlineVersionUnderCentralManagement, BlockerSeverity.Error,
                     $"PackageReference '{name}' sets Version, which NuGet rejects (NU1008) when Central Package Management is on.",
                     "Move the version to a PackageVersion in Directory.Packages.props, or use VersionOverride to override the central version for this project.",
                     _displayPath, definition.Location));
@@ -120,7 +120,7 @@ internal sealed class PackageVersionResolver
         if (userOwned)
         {
             Add(new InventoryBlocker(
-                BlockerCodes.UnresolvedPackageVersion, BlockerSeverity.Warning,
+                BlockerCode.UnresolvedPackageVersion, BlockerSeverity.Warning,
                 $"PackageReference '{name}' has no Version, VersionOverride or central PackageVersion.",
                 "Add a Version, or a PackageVersion entry in the nearest Directory.Packages.props.",
                 _displayPath, definition.Location));

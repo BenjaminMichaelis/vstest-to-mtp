@@ -103,7 +103,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         if (targetFrameworks.Length == 0)
         {
             blockers.Add(new InventoryBlocker(
-                BlockerCodes.NoTargetFramework, BlockerSeverity.Error,
+                BlockerCode.NoTargetFramework, BlockerSeverity.Error,
                 $"'{displayPath}' does not evaluate to a TargetFramework or TargetFrameworks value.",
                 "Set TargetFramework (or TargetFrameworks) in the project, Directory.Build.props or an SDK-style import, then rerun.",
                 displayPath, formatter.Location(projectPath)));
@@ -178,7 +178,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             // MSBuild reports unreadable, locked and missing project files this way too, not as IOException.
             string file = string.IsNullOrEmpty(ex.ProjectFile) ? projectPath : ex.ProjectFile;
             blockers.Add(new InventoryBlocker(
-                BlockerCodes.EvaluationFailed, BlockerSeverity.Error,
+                BlockerCode.EvaluationFailed, BlockerSeverity.Error,
                 $"MSBuild could not evaluate '{displayPath}'{(targetFramework is null ? string.Empty : $" for {targetFramework}")}: {ex.ErrorCode} {ex.BaseMessage}",
                 "Fix the reported problem (missing SDK, invalid XML or an invalid import), then rerun.",
                 displayPath, formatter.Location(file, ex.LineNumber, ex.ColumnNumber)));

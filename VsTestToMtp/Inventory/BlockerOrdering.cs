@@ -8,7 +8,7 @@ internal static class BlockerOrdering
         [.. blockers
             .DistinctBy(b => (b.Code, b.Project, b.Location, b.Message))
             .OrderBy(b => b.Project, StringComparer.Ordinal)
-            .ThenBy(b => b.Code, StringComparer.Ordinal)
+            .ThenBy(b => b.Code.ToString(), StringComparer.Ordinal)
             .ThenBy(b => b.Location?.File, StringComparer.Ordinal)
             .ThenBy(b => b.Location?.Line)
             .ThenBy(b => b.Message, StringComparer.Ordinal)];

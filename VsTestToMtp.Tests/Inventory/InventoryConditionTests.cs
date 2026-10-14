@@ -22,9 +22,12 @@ public class InventoryConditionTests
     public async Task PropertyCondition_OnAPropertyDefinedLater_IsFlagged()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", GuardedProperty + "\n" + DefineFlag);
+            .WriteProject("App/App.csproj", $"""
+                {GuardedProperty}
+                {DefineFlag}
+                """);
 
-        InventoryBlocker blocker = Blockers(workspace).Single(b => b.Code == BlockerCodes.ConditionDependsOnUnsetProperty);
+        InventoryBlocker blocker = Blockers(workspace).Single(b => b.Code == BlockerCode.ConditionDependsOnUnsetProperty);
 
         // The property is defined, but only after the condition that tests it.
         await Assert.That(blocker.RelatedLocations.Select(l => (l.File, l.Line))).IsEquivalentTo([("App/App.csproj", workspace.LineOf("App/App.csproj", "<Flag>"))]);
@@ -37,7 +40,10 @@ public class InventoryConditionTests
     public async Task PropertyCondition_OnAPropertyDefinedEarlier_IsNotFlagged()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject("App/App.csproj", DefineFlag + "\n" + GuardedProperty);
+            .WriteProject("App/App.csproj", $"""
+                {DefineFlag}
+                {GuardedProperty}
+                """);
 
         await Assert.That(Blockers(workspace)).IsEmpty();
     }
@@ -46,7 +52,11 @@ public class InventoryConditionTests
     public async Task PropertyCondition_OnAPropertyFromDirectoryBuildProps_IsNotFlagged()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Build.props", "<Project>\n" + DefineFlag + "\n</Project>")
+            .Write("Directory.Build.props", $"""
+                <Project>
+                {DefineFlag}
+                </Project>
+                """)
             .WriteProject("App/App.csproj", GuardedProperty);
 
         await Assert.That(Blockers(workspace)).IsEmpty();
@@ -57,10 +67,14 @@ public class InventoryConditionTests
     {
         // Directory.Build.targets is imported after the project body, so the property is not yet set there.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("Directory.Build.targets", "<Project>\n" + DefineFlag + "\n</Project>")
+            .Write("Directory.Build.targets", $"""
+                <Project>
+                {DefineFlag}
+                </Project>
+                """)
             .WriteProject("App/App.csproj", GuardedProperty);
 
-        await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnUnsetProperty]);
+        await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCode.ConditionDependsOnUnsetProperty]);
     }
 
     [Test]
@@ -70,7 +84,12 @@ public class InventoryConditionTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                "  <ItemGroup Condition=\"'$(Flag)' == 'true'\">\n    <PackageReference Include=\"NUnit\" Version=\"4.3.2\" />\n  </ItemGroup>\n" + DefineFlag);
+                $"""
+                  <ItemGroup Condition="'$(Flag)' == 'true'">
+                    <PackageReference Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                {DefineFlag}
+                """);
 
         await Assert.That(Blockers(workspace)).IsEmpty();
     }
@@ -81,7 +100,11 @@ public class InventoryConditionTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                "  <PropertyGroup Condition=\"'$(VSTEST_TO_MTP_UNSET_FLAG)' == ''\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+                """
+                  <PropertyGroup Condition="'$(VSTEST_TO_MTP_UNSET_FLAG)' == ''">
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                """);
 
         await Assert.That(Blockers(workspace)).IsEmpty();
     }
@@ -93,12 +116,16 @@ public class InventoryConditionTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                $"  <PropertyGroup Condition=\"'$({variable})' != ''\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+                $"""
+                  <PropertyGroup Condition="'$({variable})' != ''">
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                """);
 
         Environment.SetEnvironmentVariable(variable, "1");
         try
         {
-            InventoryBlocker blocker = Blockers(workspace).Single(b => b.Code == BlockerCodes.ConditionDependsOnEnvironment);
+            InventoryBlocker blocker = Blockers(workspace).Single(b => b.Code == BlockerCode.ConditionDependsOnEnvironment);
 
             await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Warning);
             await Assert.That(blocker.Message).Contains(variable);
@@ -116,12 +143,16 @@ public class InventoryConditionTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                $"  <PropertyGroup Condition=\"$({variable})\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+                $"""
+                  <PropertyGroup Condition="$({variable})">
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                """);
 
         Environment.SetEnvironmentVariable(variable, "true");
         try
         {
-            await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnEnvironment]);
+            await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCode.ConditionDependsOnEnvironment]);
         }
         finally
         {
@@ -137,13 +168,19 @@ public class InventoryConditionTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                $"  <PropertyGroup Condition=\"'$({variable})' != ''\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n"
-                + $"  <PropertyGroup>\n    <{variable}>from-file</{variable}>\n  </PropertyGroup>");
+                $"""
+                  <PropertyGroup Condition="'$({variable})' != ''">
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                  <PropertyGroup>
+                    <{variable}>from-file</{variable}>
+                  </PropertyGroup>
+                """);
 
         Environment.SetEnvironmentVariable(variable, "1");
         try
         {
-            await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnEnvironment]);
+            await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCode.ConditionDependsOnEnvironment]);
         }
         finally
         {
@@ -171,7 +208,11 @@ public class InventoryConditionTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                $"  <PropertyGroup Condition=\"'$({property})' != 'no-such-value'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+                $"""
+                  <PropertyGroup Condition="'$({property})' != 'no-such-value'">
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                """);
 
         await Assert.That(Blockers(workspace)).IsEmpty();
     }
@@ -182,9 +223,13 @@ public class InventoryConditionTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                "  <PropertyGroup Condition=\"'$(MSBuildFeatureFlag)' == 'on'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+                """
+                  <PropertyGroup Condition="'$(MSBuildFeatureFlag)' == 'on'">
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                """);
 
-        await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnUnsetProperty]);
+        await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCode.ConditionDependsOnUnsetProperty]);
     }
 
     [Test]
@@ -194,12 +239,16 @@ public class InventoryConditionTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .WriteProject(
                 "App/App.csproj",
-                $"  <PropertyGroup Condition=\"'$({variable})' == 'true'\">\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>");
+                $"""
+                  <PropertyGroup Condition="'$({variable})' == 'true'">
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                """);
 
         Environment.SetEnvironmentVariable(variable, "true");
         try
         {
-            await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCodes.ConditionDependsOnEnvironment]);
+            await Assert.That(Blockers(workspace).Select(b => b.Code)).IsEquivalentTo([BlockerCode.ConditionDependsOnEnvironment]);
         }
         finally
         {

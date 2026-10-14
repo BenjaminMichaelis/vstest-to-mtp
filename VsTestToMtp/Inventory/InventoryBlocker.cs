@@ -2,7 +2,7 @@ namespace VsTestToMtp.Inventory;
 
 /// <summary>An actionable reason the inventory could not (fully) determine something.</summary>
 public sealed record InventoryBlocker(
-    string Code,
+    BlockerCode Code,
     BlockerSeverity Severity,
     string Message,
     string Remediation,
