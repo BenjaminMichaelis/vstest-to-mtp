@@ -8,6 +8,10 @@ namespace VsTestToMtp.Inventory;
 /// <param name="ImportChain">Imports from the project file down to the declaring file (empty when declared in the project file).</param>
 /// <param name="IsFromProjectFile">Whether the element lives in the evaluated project file itself.</param>
 /// <param name="IsRepositoryFile">Whether the declaring file is user-owned (not part of the .NET SDK or a NuGet package).</param>
+/// <remarks>
+/// Members that are lists are compared by reference by the generated record equality, so do not rely on <c>==</c> or
+/// <c>Equals</c> for this type; compare the serialized output or specific fields.
+/// </remarks>
 public sealed record Provenance(
     SourceLocation Location,
     IReadOnlyList<string> Conditions,

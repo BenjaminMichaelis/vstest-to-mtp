@@ -43,11 +43,10 @@ internal sealed class PackageVersionResolver
 
             // NuGet reports NU1506 here because restore is inconsistent; do not pick a winner.
             Provenance[] definitions = [.. group.Select(v => resolver.Provenance(v.Xml))];
-            blockers.Add(new InventoryBlocker(
-                BlockerCode.DuplicatePackageVersion, BlockerSeverity.Warning,
+            blockers.Add(InventoryBlocker.Warning(BlockerCode.DuplicatePackageVersion,
                 $"PackageVersion '{group.Key}' is declared {definitions.Length} times ({string.Join(", ", definitions.Select(d => d.Location))}), so its central version is ambiguous.",
                 "Keep one PackageVersion per package (use Update to change a version declared elsewhere).",
-                displayPath, definitions[^1].Location)
+                displayPath, definitions[^1].Location) with
             {
                 RelatedLocations = [.. definitions.Select(d => d.Location)],
             });
@@ -56,7 +55,7 @@ internal sealed class PackageVersionResolver
 
     /// <summary>The effective version of <paramref name="item"/>, where it came from, and where that value was declared.</summary>
     /// <param name="definition">Where the reference itself is declared; blockers point there.</param>
-    public (string? Version, PackageVersionSource Source, Provenance? Definition) Resolve(ProjectItem item, bool isGlobal, Provenance definition)
+    public ResolvedVersion Resolve(ProjectItem item, bool isGlobal, Provenance definition)
     {
         string name = item.EvaluatedInclude;
         string inline = item.GetMetadataValue("Version");
@@ -68,13 +67,11 @@ internal sealed class PackageVersionResolver
             // With central management on but overrides disabled NuGet fails restore (NU1013); with it off the metadata is
             // simply not a version source, which leaves the reference unversioned.
             Add(_centralManagement
-                ? new InventoryBlocker(
-                    BlockerCode.IneffectiveVersionOverride, BlockerSeverity.Error,
+                ? InventoryBlocker.Error(BlockerCode.IneffectiveVersionOverride,
                     $"PackageReference '{name}' sets VersionOverride while CentralPackageVersionOverrideEnabled is false, which NuGet rejects (NU1013).",
                     "Remove VersionOverride, or enable version overrides (CentralPackageVersionOverrideEnabled).",
                     _displayPath, definition.Location)
-                : new InventoryBlocker(
-                    BlockerCode.IneffectiveVersionOverride, BlockerSeverity.Warning,
+                : InventoryBlocker.Warning(BlockerCode.IneffectiveVersionOverride,
                     $"PackageReference '{name}' sets VersionOverride, which has no effect unless Central Package Management is on.",
                     "Enable Central Package Management, or use Version instead of VersionOverride.",
                     _displayPath, definition.Location));
@@ -86,47 +83,45 @@ internal sealed class PackageVersionResolver
             // override one). Restore fails, so this is not an effective version.
             if (userOwned)
             {
-                Add(new InventoryBlocker(
-                    BlockerCode.InlineVersionUnderCentralManagement, BlockerSeverity.Error,
+                Add(InventoryBlocker.Error(BlockerCode.InlineVersionUnderCentralManagement,
                     $"PackageReference '{name}' sets Version, which NuGet rejects (NU1008) when Central Package Management is on.",
                     "Move the version to a PackageVersion in Directory.Packages.props, or use VersionOverride to override the central version for this project.",
                     _displayPath, definition.Location));
             }
 
-            return (null, PackageVersionSource.None, null);
+            return ResolvedVersion.None;
         }
 
         if (inline.Length > 0)
         {
-            return (inline, PackageVersionSource.Inline, MetadataProvenance(item, "Version", definition));
+            return new ResolvedVersion(inline, PackageVersionSource.Inline, MetadataProvenance(item, "Version", definition));
         }
 
         if (versionOverride.Length > 0 && _centralManagement && !_overrideAllowed)
         {
             // NU1013: restore fails; it does not fall back to the central version, so no version is effective.
-            return (null, PackageVersionSource.None, null);
+            return ResolvedVersion.None;
         }
 
         if (versionOverride.Length > 0 && _overrideAllowed)
         {
-            return (versionOverride, PackageVersionSource.VersionOverride, MetadataProvenance(item, "VersionOverride", definition));
+            return new ResolvedVersion(versionOverride, PackageVersionSource.VersionOverride, MetadataProvenance(item, "VersionOverride", definition));
         }
 
         if (_central.TryGetValue(name, out ProjectItem? centralItem) && centralItem.GetMetadataValue("Version") is { Length: > 0 } centralVersion)
         {
-            return (centralVersion, PackageVersionSource.Central, MetadataProvenance(centralItem, "Version", _resolver.Provenance(centralItem.Xml)));
+            return new ResolvedVersion(centralVersion, PackageVersionSource.Central, MetadataProvenance(centralItem, "Version", _resolver.Provenance(centralItem.Xml)));
         }
 
         if (userOwned)
         {
-            Add(new InventoryBlocker(
-                BlockerCode.UnresolvedPackageVersion, BlockerSeverity.Warning,
+            Add(InventoryBlocker.Warning(BlockerCode.UnresolvedPackageVersion,
                 $"PackageReference '{name}' has no Version, VersionOverride or central PackageVersion.",
                 "Add a Version, or a PackageVersion entry in the nearest Directory.Packages.props.",
                 _displayPath, definition.Location));
         }
 
-        return (null, PackageVersionSource.None, null);
+        return ResolvedVersion.None;
     }
 
     private void Add(InventoryBlocker blocker) => _blockers.Add(blocker);

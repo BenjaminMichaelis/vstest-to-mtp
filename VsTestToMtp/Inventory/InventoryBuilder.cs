@@ -63,8 +63,15 @@ public static class InventoryBuilder
             return
             [
                 .. selection.ProjectPaths.Select(p => new ProjectInventory(
-                    formatter.Format(p), Path.GetFileNameWithoutExtension(p), ProjectClassification.Unknown, false,
-                    [], [], [], [], [blocker])),
+                    Path: formatter.Format(p),
+                    Name: Path.GetFileNameWithoutExtension(p),
+                    Classification: ProjectClassification.Unknown,
+                    HasTestLibraryDependency: false,
+                    Frameworks: [],
+                    Runners: [],
+                    TargetFrameworks: [],
+                    Imports: [],
+                    Blockers: [blocker])),
             ];
         }
 

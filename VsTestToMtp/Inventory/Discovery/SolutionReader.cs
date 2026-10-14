@@ -109,16 +109,14 @@ internal static class SolutionReader
 
                 if (!string.Equals(extension, ".csproj", StringComparison.OrdinalIgnoreCase))
                 {
-                    blockers.Add(new InventoryBlocker(
-                        BlockerCode.UnsupportedProjectLanguage, BlockerSeverity.Info,
+                    blockers.Add(InventoryBlocker.Info(BlockerCode.UnsupportedProjectLanguage,
                         $"'{formatter.Format(projectPath)}' is not a C# project and is skipped.",
                         "Only SDK-style C# (.csproj) projects are inventoried.",
                         formatter.Format(projectPath), formatter.Location(solutionPath)));
                 }
                 else if (!File.Exists(projectPath))
                 {
-                    blockers.Add(new InventoryBlocker(
-                        BlockerCode.MissingProject, BlockerSeverity.Error,
+                    blockers.Add(InventoryBlocker.Error(BlockerCode.MissingProject,
                         $"The solution lists '{formatter.Format(projectPath)}', which does not exist.",
                         "Restore the project file or remove it from the solution, then rerun.",
                         formatter.Format(projectPath), formatter.Location(solutionPath)));
@@ -131,11 +129,9 @@ internal static class SolutionReader
         }
         catch (Exception ex) when (ex is SolutionException or IOException or UnauthorizedAccessException)
         {
-            blockers.Add(new InventoryBlocker(
-                BlockerCode.MalformedSolution, BlockerSeverity.Error,
+            blockers.Add(InventoryBlocker.Error(BlockerCode.MalformedSolution,
                 $"'{formatter.Format(solutionPath)}' could not be read: {ex.Message}",
-                "Fix or regenerate the solution file, then rerun.",
-                null, formatter.Location(solutionPath)));
+                "Fix or regenerate the solution file, then rerun.", location: formatter.Location(solutionPath)));
         }
 
         SelectionKind kind = string.Equals(System.IO.Path.GetExtension(solutionPath), ".slnx", StringComparison.OrdinalIgnoreCase) ? SelectionKind.Slnx : SelectionKind.Sln;
@@ -144,5 +140,5 @@ internal static class SolutionReader
 
     private static Selection Failed(
         SelectionKind kind, string path, BlockerCode code, string message, string remediation, PathFormatter formatter, IReadOnlyList<SourceLocation>? related = null) =>
-        new(kind, path, [], [new InventoryBlocker(code, BlockerSeverity.Error, message, remediation, null, formatter.Location(path)) { RelatedLocations = related ?? [] }]);
+        new(kind, path, [], [InventoryBlocker.Error(code, message, remediation, location: formatter.Location(path)) with { RelatedLocations = related ?? [] }]);
 }

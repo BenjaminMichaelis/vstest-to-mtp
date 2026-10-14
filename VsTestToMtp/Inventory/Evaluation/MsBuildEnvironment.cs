@@ -133,5 +133,5 @@ internal static class MsBuildEnvironment
         "Install the .NET SDK that the repository's global.json selects, then rerun.");
 
     private static InventoryBlocker Blocker(BlockerCode code, string message, string remediation) =>
-        new(code, BlockerSeverity.Error, message, remediation, null, null);
+        InventoryBlocker.Error(code, message, remediation);
 }

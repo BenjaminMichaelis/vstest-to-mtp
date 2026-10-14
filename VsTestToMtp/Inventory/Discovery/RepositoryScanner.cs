@@ -60,20 +60,16 @@ internal static partial class RepositoryScanner
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                blockers.Add(new InventoryBlocker(
-                    BlockerCode.UnreadableGlobalJson, BlockerSeverity.Error,
+                blockers.Add(InventoryBlocker.Error(BlockerCode.UnreadableGlobalJson,
                     $"'{formatter.Format(path)}' could not be read: {ex.Message}",
-                    "Grant read access to global.json (or fix the path), then rerun, so the SDK and test runner configuration can be read.",
-                    null, formatter.Location(path)));
+                    "Grant read access to global.json (or fix the path), then rerun, so the SDK and test runner configuration can be read.", location: formatter.Location(path)));
                 return null;
             }
             catch (JsonException ex)
             {
-                blockers.Add(new InventoryBlocker(
-                    BlockerCode.MalformedGlobalJson, BlockerSeverity.Error,
+                blockers.Add(InventoryBlocker.Error(BlockerCode.MalformedGlobalJson,
                     $"'{formatter.Format(path)}' is not valid JSON: {ex.Message}",
-                    "Fix global.json so the SDK and test runner configuration can be read.",
-                    null, formatter.Location(path, (int)(ex.LineNumber ?? 0) + 1, (int)(ex.BytePositionInLine ?? 0) + 1)));
+                    "Fix global.json so the SDK and test runner configuration can be read.", location: formatter.Location(path, (int)(ex.LineNumber ?? 0) + 1, (int)(ex.BytePositionInLine ?? 0) + 1)));
                 return null;
             }
         }
@@ -124,11 +120,9 @@ internal static partial class RepositoryScanner
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            blockers.Add(new InventoryBlocker(
-                BlockerCode.UnreadableDirectory, BlockerSeverity.Warning,
+            blockers.Add(InventoryBlocker.Warning(BlockerCode.UnreadableDirectory,
                 $"'{formatter.Format(directory)}' could not be scanned for CI definitions and scripts: {ex.Message}",
-                "Grant read access (or remove the directory), then rerun. Automation files under it are not listed.",
-                null, formatter.Location(directory)));
+                "Grant read access (or remove the directory), then rerun. Automation files under it are not listed.", location: formatter.Location(directory)));
         }
 
         foreach (string path in descend)

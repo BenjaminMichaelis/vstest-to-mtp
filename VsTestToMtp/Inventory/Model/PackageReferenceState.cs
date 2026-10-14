@@ -4,6 +4,10 @@ namespace VsTestToMtp.Inventory;
 /// <param name="Definition">Where the reference is declared.</param>
 /// <param name="Modifiers"><c>Update</c>/<c>Remove</c> operations that also touched the reference.</param>
 /// <param name="VersionDefinition">Where the effective version is declared (the reference itself, or the central <c>PackageVersion</c>).</param>
+/// <remarks>
+/// Members that are lists are compared by reference by the generated record equality, so do not rely on <c>==</c> or
+/// <c>Equals</c> for this type; compare the serialized output or specific fields.
+/// </remarks>
 public sealed record PackageReferenceState(
     string Name,
     string? Version,

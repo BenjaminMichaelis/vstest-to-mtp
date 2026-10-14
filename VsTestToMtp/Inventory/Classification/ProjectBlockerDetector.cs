@@ -40,8 +40,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             {
                 // MSBuild does not log imports skipped for a false condition, so an ignored import with no file
                 // is one whose condition held but whose path expanded to nothing.
-                blockers.Add(new InventoryBlocker(
-                    BlockerCode.MissingImport, BlockerSeverity.Error,
+                blockers.Add(InventoryBlocker.Error(BlockerCode.MissingImport,
                     $"Import '{skipped.UnexpandedProject}' at {location} resolves to an empty path, so the evaluated state is incomplete.",
                     """Make sure the imported file exists (for GetPathOfFileAbove, that a parent file exists), or guard the import with Condition="Exists('...')" if it is intentionally optional.""",
                     displayPath, location));
@@ -49,16 +48,14 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             else if (!File.Exists(skipped.ImportedFile))
             {
                 string target = formatter.Format(skipped.ImportedFile);
-                blockers.Add(new InventoryBlocker(
-                    BlockerCode.MissingImport, BlockerSeverity.Error,
+                blockers.Add(InventoryBlocker.Error(BlockerCode.MissingImport,
                     $"Import '{target}' at {location} does not resolve to an existing file, so the evaluated state is incomplete.",
                     """Create the file, correct the import path, or guard the import with Condition="Exists('...')" if it is intentionally optional.""",
                     displayPath, location));
             }
             else
             {
-                blockers.Add(new InventoryBlocker(
-                    BlockerCode.EvaluationFailed, BlockerSeverity.Error,
+                blockers.Add(InventoryBlocker.Error(BlockerCode.EvaluationFailed,
                     $"Import '{formatter.Format(skipped.ImportedFile)}' at {location} is empty or not a valid MSBuild file.",
                     "Fix the imported file, then rerun.",
                     displayPath, location));
@@ -92,8 +89,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                     && IsTestProjectReference().IsMatch(element.Condition)
                     && !(firstDefinition is { } defined && order.IndexOf(element) is { } at && defined < at))
                 {
-                    blockers.Add(new InventoryBlocker(
-                        BlockerCode.IsTestProjectEarlyCondition, BlockerSeverity.Warning,
+                    blockers.Add(InventoryBlocker.Warning(BlockerCode.IsTestProjectEarlyCondition,
                         $"'{formatter.Format(file)}' conditions on $(IsTestProject) before anything in the repository has reliably set it, so the condition may not see the final value.",
                         "Move this logic to Directory.Build.targets, import the file after IsTestProject is assigned, or detect test projects from package references instead of IsTestProject.",
                         displayPath, resolver.LocationOf(element)));
@@ -186,11 +182,10 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             if (!isUnsetProbe && source == PropertySourceAtEvaluation.Unset)
             {
                 string state = value is null ? "which is not set" : "which is only set later in evaluation";
-                blockers.Add(new InventoryBlocker(
-                    BlockerCode.ConditionDependsOnUnsetProperty, BlockerSeverity.Warning,
+                blockers.Add(InventoryBlocker.Warning(BlockerCode.ConditionDependsOnUnsetProperty,
                     $"Condition '{condition}' at {location} depends on '{name}', {state}, so the guarded element is treated as absent/false.",
                     $"Set '{name}' before this element (for example in Directory.Build.props) or pass it as a global property if the guarded state matters.",
-                    displayPath, location)
+                    displayPath, location) with
                 {
                     // Where the property is (only later) defined, in evaluation order; empty when it is never set.
                     RelatedLocations = [.. Definitions(value).Select(resolver.LocationOf)],
@@ -198,8 +193,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             }
             else if (source == PropertySourceAtEvaluation.Environment)
             {
-                blockers.Add(new InventoryBlocker(
-                    BlockerCode.ConditionDependsOnEnvironment, BlockerSeverity.Warning,
+                blockers.Add(InventoryBlocker.Warning(BlockerCode.ConditionDependsOnEnvironment,
                     $"Condition '{condition}' at {location} depends on the environment variable '{name}', so the result can differ between machines and CI.",
                     $"Define '{name}' explicitly in MSBuild if the guarded state matters.",
                     displayPath, location));

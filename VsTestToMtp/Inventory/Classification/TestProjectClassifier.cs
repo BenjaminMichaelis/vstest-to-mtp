@@ -12,9 +12,15 @@ internal static class TestProjectClassifier
         if (evaluated.HasErrors || evaluated.TargetFrameworks.Count == 0)
         {
             return new ProjectInventory(
-                evaluated.Path, name, ProjectClassification.Unknown, false, [], [],
-                [.. evaluated.TargetFrameworks.Select(tf => ToState(tf, ProjectClassification.Unknown, false, []))],
-                evaluated.Imports, BlockerOrdering.Normalize(blockers));
+                Path: evaluated.Path,
+                Name: name,
+                Classification: ProjectClassification.Unknown,
+                HasTestLibraryDependency: false,
+                Frameworks: [],
+                Runners: [],
+                TargetFrameworks: [.. evaluated.TargetFrameworks.Select(tf => ToState(tf, ProjectClassification.Unknown, false, []))],
+                Imports: evaluated.Imports,
+                Blockers: BlockerOrdering.Normalize(blockers));
         }
 
         List<TargetFrameworkState> states = [];
@@ -32,11 +38,10 @@ internal static class TestProjectClassifier
         if (overall == ProjectClassification.Mixed)
         {
             string summary = string.Join(", ", states.Select(s => $"{s.TargetFramework}: {s.Classification}"));
-            blockers.Add(new InventoryBlocker(
-                BlockerCode.TargetFrameworkClassificationDiffers, BlockerSeverity.Error,
+            blockers.Add(InventoryBlocker.Error(BlockerCode.TargetFrameworkClassificationDiffers,
                 $"Target frameworks classify differently ({summary}).",
                 "Decide per target framework whether this is a test application, or make the test packages and IsTestProject consistent across target frameworks.",
-                evaluated.Path, null));
+                evaluated.Path));
         }
 
         TestPackageInfo[] known =
@@ -57,8 +62,15 @@ internal static class TestProjectClassifier
         TestRunnerKind[] runners = [.. known.Select(i => i.Runner).OfType<TestRunnerKind>().Distinct().Order()];
 
         return new ProjectInventory(
-            evaluated.Path, name, overall, states.Any(s => s.HasTestLibraryDependency), frameworks, runners,
-            states, evaluated.Imports, BlockerOrdering.Normalize(blockers));
+            Path: evaluated.Path,
+            Name: name,
+            Classification: overall,
+            HasTestLibraryDependency: states.Any(s => s.HasTestLibraryDependency),
+            Frameworks: frameworks,
+            Runners: runners,
+            TargetFrameworks: states,
+            Imports: evaluated.Imports,
+            Blockers: BlockerOrdering.Normalize(blockers));
     }
 
     private static (ProjectClassification Classification, bool HasLibraryDependency, List<string> Evidence) ClassifyTargetFramework(
@@ -77,12 +89,11 @@ internal static class TestProjectClassifier
         bool hasLibraryDependency = testPackages.Any(p =>
             TestPackageCatalog.TryGet(p.Name, out TestPackageInfo? info) && info.Role != TestPackageRole.Runner);
 
-        PropertyState? isTestProject = framework.Properties.FirstOrDefault(p => string.Equals(p.Name, "IsTestProject", StringComparison.OrdinalIgnoreCase));
+        PropertyState? isTestProject = PropertyState.Find(framework.Properties, "IsTestProject");
         if (isTestProject is { Value.Length: > 0 } && !MsBuildBoolean.TryParse(isTestProject.Value, out _))
         {
             // The explicit property is authoritative, so a value that is not a boolean makes the classification undeterminable.
-            blockers.Add(new InventoryBlocker(
-                BlockerCode.InvalidIsTestProject, BlockerSeverity.Error,
+            blockers.Add(InventoryBlocker.Error(BlockerCode.InvalidIsTestProject,
                 $"IsTestProject evaluates to '{isTestProject.Value}' for {framework.TargetFramework}, which is not a boolean.",
                 "Set IsTestProject to true or false (check for a property that expands to something else), then rerun.",
                 project, isTestProject.Definition?.Location));
@@ -110,11 +121,10 @@ internal static class TestProjectClassifier
         bool anyRunner = testPackages.Any(p => Has(p, framework: false));
         if (anyFramework && anyRunner)
         {
-            blockers.Add(new InventoryBlocker(
-                BlockerCode.TestEvidenceOnlyFromImports, BlockerSeverity.Warning,
+            blockers.Add(InventoryBlocker.Warning(BlockerCode.TestEvidenceOnlyFromImports,
                 $"Test framework and runner packages are only complete because of packages declared outside '{project}', so it is not treated as a test application.",
                 "Set IsTestProject=true in the test project, or declare its test framework and runner packages in the project file.",
-                project, null));
+                project));
         }
 
         return (ProjectClassification.Production, hasLibraryDependency, evidence);
@@ -129,5 +139,12 @@ internal static class TestProjectClassifier
         ProjectClassification classification,
         bool hasLibraryDependency,
         IReadOnlyList<string> evidence) =>
-        new(framework.TargetFramework, classification, hasLibraryDependency, evidence, framework.Properties, framework.Packages, framework.ProjectReferences);
+        new(
+            TargetFramework: framework.TargetFramework,
+            Classification: classification,
+            HasTestLibraryDependency: hasLibraryDependency,
+            Evidence: evidence,
+            Properties: framework.Properties,
+            Packages: framework.Packages,
+            ProjectReferences: framework.ProjectReferences);
 }

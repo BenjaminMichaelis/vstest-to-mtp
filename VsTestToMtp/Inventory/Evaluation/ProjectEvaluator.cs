@@ -85,7 +85,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         Project? outer = Load(collection, projectPath, null, displayPath, blockers);
         if (outer is null)
         {
-            return new EvaluatedProject(displayPath, [], [], BlockerOrdering.Normalize(blockers));
+            return new EvaluatedProject(Path: displayPath, TargetFrameworks: [], Imports: [], Blockers: BlockerOrdering.Normalize(blockers));
         }
 
         // Every evaluation gets its own resolver: an import conditioned on $(TargetFramework) only exists in the inner build.
@@ -102,8 +102,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         List<EvaluatedTargetFramework> frameworks = [];
         if (targetFrameworks.Length == 0)
         {
-            blockers.Add(new InventoryBlocker(
-                BlockerCode.NoTargetFramework, BlockerSeverity.Error,
+            blockers.Add(InventoryBlocker.Error(BlockerCode.NoTargetFramework,
                 $"'{displayPath}' does not evaluate to a TargetFramework or TargetFrameworks value.",
                 "Set TargetFramework (or TargetFrameworks) in the project, Directory.Build.props or an SDK-style import, then rerun.",
                 displayPath, formatter.Location(projectPath)));
@@ -138,7 +137,11 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             _blockerDetector.AddEarlyIsTestProjectBlockers(project, resolver, displayPath, blockers);
         }
 
-        return new EvaluatedProject(displayPath, frameworks, CaptureImports(evaluated), BlockerOrdering.Normalize(blockers));
+        return new EvaluatedProject(
+            Path: displayPath,
+            TargetFrameworks: frameworks,
+            Imports: CaptureImports(evaluated),
+            Blockers: BlockerOrdering.Normalize(blockers));
     }
 
     private Project? Load(ProjectCollection collection, string projectPath, string? targetFramework, string displayPath, List<InventoryBlocker> blockers)
@@ -178,8 +181,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         {
             // MSBuild reports unreadable, locked and missing project files this way too, not as IOException.
             string file = string.IsNullOrEmpty(ex.ProjectFile) ? projectPath : ex.ProjectFile;
-            blockers.Add(new InventoryBlocker(
-                BlockerCode.EvaluationFailed, BlockerSeverity.Error,
+            blockers.Add(InventoryBlocker.Error(BlockerCode.EvaluationFailed,
                 $"MSBuild could not evaluate '{displayPath}'{(targetFramework is null ? string.Empty : $" for {targetFramework}")}: {ex.ErrorCode} {ex.BaseMessage}",
                 "Fix the reported problem (missing SDK, invalid XML or an invalid import), then rerun.",
                 displayPath, formatter.Location(file, ex.LineNumber, ex.ColumnNumber)));
@@ -224,7 +226,11 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
 
         ProjectBlockerDetector.AddConditionBlockers(project, resolver, displayPath, blockers);
 
-        return new EvaluatedTargetFramework(targetFramework, properties, packages, CaptureProjectReferences(project, resolver));
+        return new EvaluatedTargetFramework(
+            TargetFramework: targetFramework,
+            Properties: properties,
+            Packages: packages,
+            ProjectReferences: CaptureProjectReferences(project, resolver));
     }
 
     private List<ProjectReferenceState> CaptureProjectReferences(Project project, ProvenanceResolver resolver)
@@ -300,8 +306,15 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             // Provenance is best effort; the item's own element is already a usable location.
         }
 
-        (string? version, PackageVersionSource versionSource, Provenance? versionDefinition) = versions.Resolve(item, isGlobal, definition);
-        return new PackageReferenceState(item.EvaluatedInclude, version, versionSource, isGlobal, definition, modifiers, versionDefinition);
+        ResolvedVersion resolved = versions.Resolve(item, isGlobal, definition);
+        return new PackageReferenceState(
+            Name: item.EvaluatedInclude,
+            Version: resolved.Version,
+            VersionSource: resolved.Source,
+            IsGlobal: isGlobal,
+            Definition: definition,
+            Modifiers: modifiers,
+            VersionDefinition: resolved.Definition);
     }
 
     private List<ImportRecord> CaptureImports(IEnumerable<(Project Project, ProvenanceResolver Resolver)> evaluated)
