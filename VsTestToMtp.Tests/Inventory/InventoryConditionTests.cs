@@ -283,6 +283,42 @@ public class InventoryConditionTests
     }
 
     [Test]
+    public async Task ConditionOnPackageMetadata_DependingOnAnUnsetProperty_IsFlagged()
+    {
+        // The Version can come from conditional metadata, so the condition decides the effective version.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <ItemGroup>\n    <PackageReference Include=\"NUnit\">\n      <Version Condition=\"'$(VSTEST_TO_MTP_UNSET_FLAG)' == 'x'\">4.3.2</Version>\n    </PackageReference>\n  </ItemGroup>");
+
+        InventoryBlocker blocker = Blockers(workspace).Single(b => b.Code == BlockerCode.ConditionDependsOnUnsetProperty);
+
+        await Assert.That(blocker.Location!.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "<Version Condition"));
+    }
+
+    [Test]
+    public async Task ConditionOnItemDefinitionMetadata_DependingOnAnUnsetProperty_IsFlagged()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <ItemDefinitionGroup>\n    <PackageReference>\n      <VersionOverride Condition=\"'$(VSTEST_TO_MTP_UNSET_FLAG)' == 'x'\">4.3.2</VersionOverride>\n    </PackageReference>\n  </ItemDefinitionGroup>");
+
+        await Assert.That(Blockers(workspace).Select(b => b.Code)).Contains(BlockerCode.ConditionDependsOnUnsetProperty);
+    }
+
+    [Test]
+    public async Task ConditionOnMetadataOfAnIrrelevantItemType_IsNotFlagged()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                "  <ItemGroup>\n    <Content Include=\"a.txt\">\n      <Link Condition=\"'$(VSTEST_TO_MTP_UNSET_FLAG)' == 'x'\">b.txt</Link>\n    </Content>\n  </ItemGroup>");
+
+        await Assert.That(Blockers(workspace)).IsEmpty();
+    }
+
+    [Test]
     public async Task HyphenatedPropertyName_IsAnalysedLikeAnyOther()
     {
         // MSBuild property names may contain hyphens, so a condition on an unset one must still be reported.

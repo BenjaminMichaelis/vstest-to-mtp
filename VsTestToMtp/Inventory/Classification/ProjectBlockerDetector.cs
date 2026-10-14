@@ -29,12 +29,10 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     {
         foreach (SkippedImport skipped in skippedImports)
         {
+            // Every ignored import counts, wherever the importing file lives: a missing or empty import inside an SDK or package
+            // means MSBuild's picture of the project is incomplete just as much as one in the repository. Ownership only changes the advice.
             string importingFile = skipped.ImportingFile.Length == 0 ? resolver.ProjectPath : skipped.ImportingFile;
-            if (!resolver.IsRepositoryFile(importingFile))
-            {
-                continue;
-            }
-
+            bool external = !resolver.IsRepositoryFile(importingFile);
             SourceLocation location = formatter.Location(importingFile, skipped.Line, skipped.Column);
             if (string.IsNullOrEmpty(skipped.ImportedFile))
             {
@@ -42,7 +40,7 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                 // is one whose condition held but whose path expanded to nothing.
                 blockers.Add(InventoryBlocker.Error(BlockerCode.MissingImport,
                     $"Import '{skipped.UnexpandedProject}' at {location} resolves to an empty path, so the evaluated state is incomplete.",
-                    """Make sure the imported file exists (for GetPathOfFileAbove, that a parent file exists), or guard the import with Condition="Exists('...')" if it is intentionally optional.""",
+                    Advice(external, """Make sure the imported file exists (for GetPathOfFileAbove, that a parent file exists), or guard the import with Condition="Exists('...')" if it is intentionally optional."""),
                     displayPath, location));
             }
             else if (!File.Exists(skipped.ImportedFile))
@@ -50,18 +48,24 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
                 string target = formatter.Format(skipped.ImportedFile);
                 blockers.Add(InventoryBlocker.Error(BlockerCode.MissingImport,
                     $"Import '{target}' at {location} does not resolve to an existing file, so the evaluated state is incomplete.",
-                    """Create the file, correct the import path, or guard the import with Condition="Exists('...')" if it is intentionally optional.""",
+                    Advice(external, """Create the file, correct the import path, or guard the import with Condition="Exists('...')" if it is intentionally optional."""),
                     displayPath, location));
             }
             else
             {
                 blockers.Add(InventoryBlocker.Error(BlockerCode.EvaluationFailed,
                     $"Import '{formatter.Format(skipped.ImportedFile)}' at {location} is empty or not a valid MSBuild file.",
-                    "Fix the imported file, then rerun.",
+                    Advice(external, "Fix the imported file, then rerun."),
                     displayPath, location));
             }
         }
     }
+
+    // The repository's own advice applies to its own files; a file inside an SDK or package cannot be edited, so point at the SDK instead.
+    private static string Advice(bool external, string repositoryAdvice) => external
+        ? "The file belongs to an SDK or package, not the repository: its installation is incomplete or damaged, or this version is incompatible with the "
+          + "installed SDK. Reinstall or restore it, or pin a different version in global.json, then rerun."
+        : repositoryAdvice;
 
     /// <summary>
     /// Conditions on <c>$(IsTestProject)</c> inside early-evaluated <c>.props</c> files are unreliable: they run
@@ -133,8 +137,15 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
             foreach (ProjectElement element in root.AllChildren.Where(IsRelevantElement))
             {
                 SourceLocation location = resolver.LocationOf(element);
-                int? evaluatedAt = element is ProjectItemElement ? null : order.IndexOf(element);
-                foreach (string condition in ProvenanceResolver.Conditions(element))
+                // Items, item definitions and their metadata are evaluated after every property, so they see final property state.
+                int? evaluatedAt = element is ProjectItemElement or ProjectItemDefinitionElement or ProjectMetadataElement ? null : order.IndexOf(element);
+
+                // A metadata element sits inside an item (or item definition) that is analysed on its own, so only its own condition
+                // is new; its ancestors' conditions would just be reported a second time.
+                IEnumerable<string> conditions = element is ProjectMetadataElement { Condition.Length: > 0 } metadata
+                    ? [metadata.Condition.Trim()]
+                    : element is ProjectMetadataElement ? [] : ProvenanceResolver.Conditions(element);
+                foreach (string condition in conditions)
                 {
                     AddConditionBlockers(project, resolver, condition, location, evaluatedAt, order, displayPath, blockers);
                 }
@@ -271,6 +282,11 @@ internal sealed partial class ProjectBlockerDetector(PathFormatter formatter)
     {
         ProjectPropertyElement property => ProjectEvaluator.RelevantProperties.Contains(property.Name, StringComparer.OrdinalIgnoreCase),
         ProjectItemElement item => RelevantItemTypes.Contains(item.ItemType),
+
+        // The effective Version/VersionOverride can come from conditional metadata or an item definition.
+        ProjectItemDefinitionElement definition => RelevantItemTypes.Contains(definition.ItemType),
+        ProjectMetadataElement { Parent: ProjectItemElement item } => RelevantItemTypes.Contains(item.ItemType),
+        ProjectMetadataElement { Parent: ProjectItemDefinitionElement definition } => RelevantItemTypes.Contains(definition.ItemType),
         ProjectImportElement => true,
         _ => false,
     };

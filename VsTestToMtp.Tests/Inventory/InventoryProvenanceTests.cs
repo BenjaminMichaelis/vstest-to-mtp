@@ -7,7 +7,10 @@ using TUnit.Assertions.Enums;
 using VsTestToMtp.Inventory;
 
 // MSBuild evaluation blocks threads; running many evaluations in parallel starves the thread pool and is far slower than serial.
-[NotInParallel("MSBuildEvaluation")]
+// Several tests here point the process-wide NUGET_PACKAGES at a disposable folder (directly, or through InventoryOptions.SdkPackagesDirectory).
+// A key only excludes tests carrying the same key, so a test that launches a child process (FixtureBaselineTests runs `dotnet test`) could
+// inherit that folder and race its deletion. No key means: never in parallel with any other test.
+[NotInParallel]
 public class InventoryProvenanceTests
 {
     private static readonly string[] MultiTarget = ["net10.0", "net8.0"];
@@ -163,6 +166,42 @@ public class InventoryProvenanceTests
             await Assert.That(Directory.Exists(workspace.PathOf("packages"))).IsFalse();
             await Assert.That(Fixtures.FixtureWorkspace.ComputeHash(workspace.RootPath)).IsEqualTo(before);
             await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
+        }
+        finally
+        {
+            if (Directory.Exists(cache))
+            {
+                Directory.Delete(cache, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public async Task UnconditionalMissingImportInsideAVersionedSdk_IsReported_NotDroppedBecauseTheFileIsExternal()
+    {
+        // Who owns a file decides where a fix would go, not whether MSBuild's picture of the project is complete.
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the SDK package location is not under this test's control.");
+            return;
+        }
+
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-sdk-cache", Guid.NewGuid().ToString("N"));
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("NuGet.config", LocalFeedNuGetConfig)
+            .WriteProject("App/App.csproj", """  <Sdk Name="Local.Test.Sdk" Version="1.0.0" />""");
+        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", "<Project>\n  <Import Project=\"does-not-exist.props\" />\n</Project>");
+
+        try
+        {
+            ProjectInventory app = InventoryBuilder
+                .Build(workspace.PathOf("App/App.csproj"), new InventoryOptions(workspace.RootPath, SdkPackagesDirectory: cache))
+                .Projects.Single();
+
+            InventoryBlocker blocker = app.Blockers.Single(b => b.Code == BlockerCode.MissingImport);
+            await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+            await Assert.That(blocker.Message).Contains("does-not-exist.props");
+            await Assert.That(app.Classification).IsEqualTo(ProjectClassification.Unknown);
         }
         finally
         {

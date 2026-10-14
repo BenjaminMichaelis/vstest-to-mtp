@@ -71,6 +71,21 @@ How established Microsoft tools use the same APIs, checked against their source.
 | Ignore restore-generated imports (`ExcludeRestorePackageImports=true`) | NuGet's own restore graph (NuGet.targets) | Same, plus `ImportProjectExtensionProps/Targets=false`. |
 | `Project.GetItemProvenance`, `ImplicitImportLocation` | No open-source caller outside dotnet/msbuild (Visual Studio uses `GetItemProvenance`, documented as "prone to change") | Used, and pinned by tests. |
 
+## Policies the code applies consistently
+
+When adding a check, decide which of these it falls under; most review findings so far were one rule applied in some places and not others.
+
+- **Ownership decides where a fix goes, never whether the picture is complete.** Whether a file belongs to the repository (as opposed to an SDK,
+  a package or the NuGet cache) decides which files are scanned for condition analysis, whose declarations are reported in `Imports` and
+  `Packages`, and where a blocker points (a version blocker points at the element that declares the offending `Version`/`VersionOverride`, which
+  can be an `Update` in another file). It does **not** decide whether MSBuild's picture of the project is complete: an ignored (missing, empty or
+  invalid) import is reported wherever the importing file lives, with advice that points at the SDK or package when it is not the repository's file.
+- **Condition analysis covers every element that can change a relevant value.** Analysed: relevant property elements; item elements of the relevant
+  types (`PackageReference`, `PackageVersion`, `GlobalPackageReference`, `ProjectReference`), their metadata elements, item definitions of those
+  types and their metadata; and imports. Property and import conditions see only properties defined earlier in evaluation order; items, item
+  definitions and metadata are evaluated after every property and so see final state. Not analysed (see #30): `Choose`/`When`/`Otherwise` branches
+  and targets/tasks (which do not run during evaluation).
+
 ## Known limits
 
 - An SDK referenced with a version (`Sdk="MSTest.Sdk/3.6.4"`) is resolved by MSBuild's NuGet SDK resolver, which downloads a missing package
