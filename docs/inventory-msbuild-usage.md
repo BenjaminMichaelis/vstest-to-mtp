@@ -78,7 +78,10 @@ How established Microsoft tools use the same APIs, checked against their source.
   write there, so evaluation runs with `NUGET_PACKAGES` pointed at `InventoryOptions.SdkPackagesDirectory` (default: NuGet's per-user packages
   folder) unless `NUGET_PACKAGES` is already set, since that variable takes precedence over `NuGet.config` (`NuGetPackagesScope`). The trade-off:
   an SDK that is only present in a repository-local packages folder is fetched again into the redirected folder, which needs the package source
-  to be reachable. We leave the resolver on, as Roslyn's MSBuildWorkspace, slngen, `dotnet new` and NuGet do;
+  to be reachable. A `NUGET_PACKAGES` that is already set (or an `InventoryOptions.SdkPackagesDirectory` the caller passes) is taken as the caller's
+  explicit choice and is not second-guessed, so if it points inside the repository (for example a CI cache in the workspace) a versioned SDK that
+  is missing from it is extracted there. The "never writes into the repository" guarantee therefore holds for the default and for repository
+  `NuGet.config` files, not for a location the caller chose themselves. We leave the resolver on, as Roslyn's MSBuildWorkspace, slngen, `dotnet new` and NuGet do;
   disabling it would make every MSTest.Sdk project un-inventoryable even after a restore. `MSBUILDDISABLENUGETSDKRESOLVER=1` is the resolver's
   only off switch ([NuGetSdkResolver.cs](https://github.com/NuGet/NuGet.Client/blob/b337f5b80d3363a61f773f2e1c3757526a474610/src/NuGet.Core/Microsoft.Build.NuGetSdkResolver/NuGetSdkResolver.cs#L56-L60));
   with it set, such projects surface as `EvaluationFailed` blockers.

@@ -8,6 +8,7 @@ namespace VsTestToMtp.Inventory;
 /// <param name="SdkPackagesDirectory">
 /// Where MSBuild's NuGet SDK resolver may extract a missing versioned SDK (for example <c>MSTest.Sdk/x.y</c>) while evaluating,
 /// instead of any packages folder a <c>NuGet.config</c> in the repository would choose. Defaults to NuGet's per-user packages folder.
-/// Ignored when the <c>NUGET_PACKAGES</c> environment variable is already set.
+/// Ignored when the <c>NUGET_PACKAGES</c> environment variable is already set. Neither value is checked against the repository: a
+/// location the caller chooses, inside the repository or not, is used as given.
 /// </param>
 public sealed record InventoryOptions(string? RootPath = null, string? SdkPackagesDirectory = null);
