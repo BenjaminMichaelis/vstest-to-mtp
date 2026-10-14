@@ -300,6 +300,104 @@ public class InventoryProvenanceTests
         await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.DuplicatePackageVersion, BlockerCode.UnresolvedPackageVersion]);
     }
 
+    private const string CentralPackages =
+        "<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n"
+        + "  <ItemGroup>\n    <PackageVersion Include=\"Ext.Pkg\" Version=\"1.0.0\" />\n    <PackageVersion Include=\"Local.Pkg\" Version=\"1.0.0\" />\n  </ItemGroup>\n</Project>";
+
+    [Test]
+    public async Task RepositoryUpdateOfAnExternallyDeclaredReference_UnderCentralManagement_IsReportedAtTheUpdate()
+    {
+        // The reference is declared in a file outside the repository (here: inside the NuGet packages folder), but the offending
+        // Version comes from a repository-owned Update, so that is where the blocker belongs.
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-ext-cache", Guid.NewGuid().ToString("N"));
+        string external = Path.Combine(cache, "ext.props");
+        Directory.CreateDirectory(cache);
+        File.WriteAllText(external, "<Project>\n  <ItemGroup>\n    <PackageReference Include=\"Ext.Pkg\" />\n  </ItemGroup>\n</Project>");
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", CentralPackages)
+            .WriteProject(
+                "App/App.csproj",
+                $"  <Import Project=\"{external}\" />\n  <ItemGroup>\n    <PackageReference Update=\"Ext.Pkg\" Version=\"2.0.0\" />\n  </ItemGroup>");
+
+        string? previous = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        Environment.SetEnvironmentVariable("NUGET_PACKAGES", cache);
+        try
+        {
+            ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+            InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.InlineVersionUnderCentralManagement);
+            await Assert.That(blocker.Location!.File).IsEqualTo("App/App.csproj");
+            await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "Update=\"Ext.Pkg\""));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", previous);
+            Directory.Delete(cache, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task RepositoryVersionOverrideUpdate_OfAnExternallyDeclaredReference_IsReportedAtTheUpdate()
+    {
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-ext-cache", Guid.NewGuid().ToString("N"));
+        string external = Path.Combine(cache, "ext.props");
+        Directory.CreateDirectory(cache);
+        File.WriteAllText(external, "<Project>\n  <ItemGroup>\n    <PackageReference Include=\"Ext.Pkg\" />\n  </ItemGroup>\n</Project>");
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", CentralPackages.Replace(
+                "</ManagePackageVersionsCentrally>",
+                "</ManagePackageVersionsCentrally>\n    <CentralPackageVersionOverrideEnabled>false</CentralPackageVersionOverrideEnabled>"))
+            .WriteProject(
+                "App/App.csproj",
+                $"  <Import Project=\"{external}\" />\n  <ItemGroup>\n    <PackageReference Update=\"Ext.Pkg\" VersionOverride=\"2.0.0\" />\n  </ItemGroup>");
+
+        string? previous = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        Environment.SetEnvironmentVariable("NUGET_PACKAGES", cache);
+        try
+        {
+            ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+            InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.IneffectiveVersionOverride);
+            await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+            await Assert.That(blocker.Location!.File).IsEqualTo("App/App.csproj");
+            await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "Update=\"Ext.Pkg\""));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", previous);
+            Directory.Delete(cache, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task ExternalUpdateOfARepositoryReference_IsNotReportedAtTheRepositoryFile()
+    {
+        // The Version is set by a file the user does not own, so a blocker at the repository's Include would send them to the wrong place.
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-ext-cache", Guid.NewGuid().ToString("N"));
+        string external = Path.Combine(cache, "ext.props");
+        Directory.CreateDirectory(cache);
+        File.WriteAllText(external, "<Project>\n  <ItemGroup>\n    <PackageReference Update=\"Local.Pkg\" Version=\"2.0.0\" />\n  </ItemGroup>\n</Project>");
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", CentralPackages)
+            .WriteProject(
+                "App/App.csproj",
+                $"  <ItemGroup>\n    <PackageReference Include=\"Local.Pkg\" />\n  </ItemGroup>\n  <Import Project=\"{external}\" />");
+
+        string? previous = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        Environment.SetEnvironmentVariable("NUGET_PACKAGES", cache);
+        try
+        {
+            ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+            await Assert.That(project.Blockers.Select(b => b.Code)).DoesNotContain(BlockerCode.InlineVersionUnderCentralManagement);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", previous);
+            Directory.Delete(cache, recursive: true);
+        }
+    }
+
     [Test]
     public async Task VersionOverride_IsIgnored_WhenCentralPackageManagementIsOff()
     {

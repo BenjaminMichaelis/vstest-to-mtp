@@ -927,6 +927,45 @@ public class InventoryScenarioTests
     }
 
     [Test]
+    [Arguments("[]", "root")]
+    [Arguments("{ \"sdk\": \"10.0.401\" }", "sdk must be an object")]
+    [Arguments("{ \"sdk\": { \"version\": 10 } }", "sdk.version must be a string")]
+    [Arguments("{ \"sdk\": { \"rollForward\": true } }", "sdk.rollForward must be a string")]
+    [Arguments("{ \"test\": [] }", "test must be an object")]
+    [Arguments("{ \"test\": { \"runner\": 42 } }", "test.runner must be a string")]
+    [Arguments("{ \"msbuild-sdks\": [] }", "msbuild-sdks must be an object")]
+    [Arguments("{ \"msbuild-sdks\": { \"Foo.Sdk\": 1 } }", "msbuild-sdks.Foo.Sdk must be a string")]
+    public async Task GlobalJsonWithTheWrongShape_IsReportedAsMalformed_NotReadAsAbsentSettings(string json, string expectedProblem)
+    {
+        // A wrong shape must not silently read as "setting absent": an absent test.runner means VSTest.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("global.json", json)
+            .WriteProject("App/App.csproj");
+
+        InventoryResult result = workspace.Inventory("App/App.csproj");
+
+        await Assert.That(result.GlobalJson).IsNull();
+        InventoryBlocker blocker = result.Blockers.First(b => b.Code == BlockerCode.MalformedGlobalJson);
+        await Assert.That(blocker.Message).Contains(expectedProblem);
+        await Assert.That(blocker.Location!.File).IsEqualTo("global.json");
+    }
+
+    [Test]
+    public async Task GlobalJsonWithNullOrUnknownEntries_IsStillAccepted()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("global.json", "{ \"sdk\": { \"version\": \"10.0.401\", \"rollForward\": null, \"allowPrerelease\": false }, \"test\": null, \"other\": [1, 2] }")
+            .WriteProject("App/App.csproj");
+
+        GlobalJsonInfo? info = workspace.Inventory("App/App.csproj").GlobalJson;
+
+        await Assert.That(info).IsNotNull();
+        await Assert.That(info!.SdkVersion).IsEqualTo("10.0.401");
+        await Assert.That(info.RollForward).IsNull();
+        await Assert.That(info.TestRunner).IsNull();
+    }
+
+    [Test]
     public async Task Automation_FindsCiAndScriptsAndSkipsGeneratedAndHiddenDirectories()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()

@@ -86,6 +86,10 @@ How established Microsoft tools use the same APIs, checked against their source.
   only off switch ([NuGetSdkResolver.cs](https://github.com/NuGet/NuGet.Client/blob/b337f5b80d3363a61f773f2e1c3757526a474610/src/NuGet.Core/Microsoft.Build.NuGetSdkResolver/NuGetSdkResolver.cs#L56-L60));
   with it set, such projects surface as `EvaluationFailed` blockers.
 
+- While it evaluates, the inventory sets the process-wide `NUGET_PACKAGES` environment variable (`NuGetPackagesScope`) and restores it afterwards.
+  Evaluations are serialized by a lock, but that lock cannot coordinate with unrelated NuGet or MSBuild work in the same process: a host running
+  such work concurrently could inherit the temporary folder, or have its own change to the variable undone. Treat `InventoryBuilder` as not safe to
+  run alongside other in-process NuGet/MSBuild work. Evaluating in a worker process (#26) would remove the problem.
 - One MSBuild/SDK per process (see above). Inventorying repositories that pin different SDKs needs one process per SDK.
 - Package-contributed properties (from `obj/*.nuget.g.props`) are deliberately not seen; package evidence comes from `TestPackageCatalog`.
 - Condition analysis follows property references in conditions; it does not evaluate conditions itself.

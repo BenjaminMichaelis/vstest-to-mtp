@@ -44,19 +44,7 @@ internal static partial class RepositoryScanner
             {
                 string json = File.ReadAllText(path);
                 using JsonDocument document = JsonDocument.Parse(json, JsonOptions);
-                JsonElement root = document.RootElement;
-                JsonElement sdk = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("sdk", out JsonElement s) ? s : default;
-                JsonElement test = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("test", out JsonElement t) ? t : default;
-                JsonElement msbuildSdks = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("msbuild-sdks", out JsonElement m) ? m : default;
-
-                return new GlobalJsonInfo(
-                    formatter.Format(path),
-                    String(sdk, "version"),
-                    String(sdk, "rollForward"),
-                    String(test, "runner"),
-                    msbuildSdks.ValueKind == JsonValueKind.Object
-                        ? [.. msbuildSdks.EnumerateObject().Select(p => $"{p.Name}/{p.Value}").Order(StringComparer.Ordinal)]
-                        : []);
+                return ParseGlobalJson(document.RootElement, path, formatter, blockers);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -173,12 +161,105 @@ internal static partial class RepositoryScanner
         }
     }
 
-    private static string? String(JsonElement element, string property) =>
-        element.ValueKind == JsonValueKind.Object
-        && element.TryGetProperty(property, out JsonElement value)
-        && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
+    /// <summary>
+    /// Reads the settings we care about. A syntactically valid file with the wrong shape is reported, not read as "setting absent":
+    /// an absent <c>test.runner</c> means VSTest, so silently ignoring a malformed one would change the answer. JSON <c>null</c> and
+    /// unknown properties are accepted, as <c>dotnet</c> does.
+    /// </summary>
+    private static GlobalJsonInfo? ParseGlobalJson(JsonElement root, string path, PathFormatter formatter, List<InventoryBlocker> blockers)
+    {
+        List<string> problems = [];
+        List<string> msbuildSdks = [];
+        string? version = null;
+        string? rollForward = null;
+        string? runner = null;
+
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            problems.Add($"the root must be a JSON object, not {Describe(root)}");
+        }
+        else
+        {
+            JsonElement sdk = Section(root, "sdk", problems);
+            JsonElement test = Section(root, "test", problems);
+            JsonElement sdks = Section(root, "msbuild-sdks", problems);
+            version = StringValue(sdk, "sdk", "version", problems);
+            rollForward = StringValue(sdk, "sdk", "rollForward", problems);
+            runner = StringValue(test, "test", "runner", problems);
+
+            if (sdks.ValueKind == JsonValueKind.Object)
+            {
+                foreach (JsonProperty entry in sdks.EnumerateObject())
+                {
+                    if (entry.Value.ValueKind == JsonValueKind.String)
+                    {
+                        msbuildSdks.Add($"{entry.Name}/{entry.Value.GetString()}");
+                    }
+                    else
+                    {
+                        problems.Add($"msbuild-sdks.{entry.Name} must be a string, not {Describe(entry.Value)}");
+                    }
+                }
+            }
+        }
+
+        if (problems.Count == 0)
+        {
+            return new GlobalJsonInfo(formatter.Format(path), version, rollForward, runner, [.. msbuildSdks.Order(StringComparer.Ordinal)]);
+        }
+
+        foreach (string problem in problems)
+        {
+            blockers.Add(InventoryBlocker.Error(BlockerCode.MalformedGlobalJson,
+                $"'{formatter.Format(path)}' is not a valid global.json: {problem}.",
+                "Fix global.json so the SDK and test runner configuration can be read.", location: formatter.Location(path)));
+        }
+
+        return null;
+    }
+
+    // A section that is absent or null is simply not there; one of the wrong kind is a problem.
+    private static JsonElement Section(JsonElement root, string name, List<string> problems)
+    {
+        if (!root.TryGetProperty(name, out JsonElement section) || section.ValueKind == JsonValueKind.Null)
+        {
+            return default;
+        }
+
+        if (section.ValueKind != JsonValueKind.Object)
+        {
+            problems.Add($"{name} must be an object, not {Describe(section)}");
+            return default;
+        }
+
+        return section;
+    }
+
+    private static string? StringValue(JsonElement section, string sectionName, string name, List<string> problems)
+    {
+        if (section.ValueKind != JsonValueKind.Object || !section.TryGetProperty(name, out JsonElement value) || value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            problems.Add($"{sectionName}.{name} must be a string, not {Describe(value)}");
+            return null;
+        }
+
+        return value.GetString();
+    }
+
+    private static string Describe(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.Object => "an object",
+        JsonValueKind.Array => "an array",
+        JsonValueKind.String => "a string",
+        JsonValueKind.Number => "a number",
+        JsonValueKind.True or JsonValueKind.False => "a boolean",
+        _ => "null",
+    };
 
     [GeneratedRegex(@"\bdotnet\s+test\b", RegexOptions.IgnoreCase)]
     private static partial Regex DotNetTest();
