@@ -1,0 +1,770 @@
+namespace VsTestToMtp.Tests.Inventory;
+
+using System.IO.Compression;
+
+using TUnit.Assertions.Enums;
+
+using VsTestToMtp.Inventory;
+
+// MSBuild evaluation blocks threads; running many evaluations in parallel starves the thread pool and is far slower than serial.
+// Several tests here point the process-wide NUGET_PACKAGES at a disposable folder (directly, or through InventoryOptions.SdkPackagesDirectory).
+// A key only excludes tests carrying the same key, so a test that launches a child process (FixtureBaselineTests runs `dotnet test`) could
+// inherit that folder and race its deletion. No key means: never in parallel with any other test.
+[NotInParallel]
+public class InventoryProvenanceTests
+{
+    private static readonly string[] MultiTarget = ["net10.0", "net8.0"];
+
+    [Test]
+    public async Task ProjectReferences_AreReportedPerTargetFramework()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("Core/Core.csproj")
+            .WriteProject("Legacy/Legacy.csproj")
+            .WriteProject(
+                "App/App.csproj",
+                """
+                  <ItemGroup>
+                    <ProjectReference Include="..\Core\Core.csproj" />
+                  </ItemGroup>
+                  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+                    <ProjectReference Include="..\Legacy\Legacy.csproj" />
+                  </ItemGroup>
+                """,
+                targetFrameworks: MultiTarget)
+            .WriteSlnx("All.slnx", "App/App.csproj", "Core/Core.csproj");
+
+        ProjectInventory app = workspace.Inventory("All.slnx").Projects.Single(p => p.Name == "App");
+
+        TargetFrameworkState net10 = app.TargetFrameworks.Single(t => t.TargetFramework == "net10.0");
+        TargetFrameworkState net8 = app.TargetFrameworks.Single(t => t.TargetFramework == "net8.0");
+        await Assert.That(net10.ProjectReferences.Select(r => r.Path)).IsEquivalentTo(["Core/Core.csproj"]);
+        await Assert.That(net8.ProjectReferences.Select(r => (r.Path, r.IsInSelection))).IsEquivalentTo(
+            [("Core/Core.csproj", true), ("Legacy/Legacy.csproj", false)],
+            CollectionOrdering.Matching);
+        await Assert.That(net8.ProjectReferences.Single(r => r.Path == "Legacy/Legacy.csproj").Definition.Conditions)
+            .IsEquivalentTo(["'$(TargetFramework)' == 'net8.0'"]);
+    }
+
+    [Test]
+    public async Task ImportConditionedOnTargetFramework_IsRecordedWithItsImportChain()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("App/net10.props", """
+                <Project>
+                  <PropertyGroup>
+                    <IsPackable>false</IsPackable>
+                  </PropertyGroup>
+                </Project>
+                """)
+            .WriteProject(
+                "App/App.csproj",
+                """  <Import Project="net10.props" Condition="'$(TargetFramework)' == 'net10.0'" />""",
+                targetFrameworks: MultiTarget);
+
+        ProjectInventory app = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        ImportRecord import = app.Imports.Single(i => i.File == "App/net10.props");
+        await Assert.That(import.ImportedBy.File).IsEqualTo("App/App.csproj");
+        await Assert.That(import.Condition).IsEqualTo("'$(TargetFramework)' == 'net10.0'");
+
+        PropertyState net10 = app.TargetFrameworks.Single(t => t.TargetFramework == "net10.0").GetProperty("IsPackable")!;
+        await Assert.That(net10.Value).IsEqualTo("false");
+        await Assert.That(net10.Definition!.Location.File).IsEqualTo("App/net10.props");
+        await Assert.That(net10.Definition.ImportChain.Select(s => s.ImportedBy.File)).IsEquivalentTo(["App/App.csproj"]);
+        await Assert.That(net10.Definition.ImportChain.Single().Condition).IsEqualTo("'$(TargetFramework)' == 'net10.0'");
+
+        PropertyState net8 = app.TargetFrameworks.Single(t => t.TargetFramework == "net8.0").GetProperty("IsPackable")!;
+        await Assert.That(net8.Value).IsEqualTo("true");
+        await Assert.That(net8.Definition!.IsRepositoryFile).IsFalse();
+    }
+
+    private const string LocalFeedNuGetConfig = """
+        <configuration>
+          <config>
+            <add key="globalPackagesFolder" value="packages" />
+          </config>
+          <packageSources>
+            <clear />
+            <add key="local" value="feed" />
+          </packageSources>
+        </configuration>
+        """;
+
+    private const string SdkProps = """
+        <Project>
+          <PropertyGroup>
+            <IsPackable>false</IsPackable>
+          </PropertyGroup>
+        </Project>
+        """;
+
+    [Test]
+    public async Task FilesFromAVersionedSdkPackage_AreNotRepositoryFiles_WhereverTheyAreExtracted()
+    {
+        // NUGET_PACKAGES decides where the package goes when it is set, which these tests control themselves.
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the SDK package location is not under this test's control.");
+            return;
+        }
+
+        // The SDK package comes from a local feed and is extracted to a folder with no "NuGet" in its path,
+        // so nothing about the path says what it is; only MSBuild's SDK resolution does.
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-sdk-cache", Guid.NewGuid().ToString("N"));
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("NuGet.config", LocalFeedNuGetConfig)
+            .WriteProject("App/App.csproj", """  <Sdk Name="Local.Test.Sdk" Version="1.0.0" />""");
+        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", SdkProps);
+
+        try
+        {
+            ProjectInventory app = InventoryBuilder
+                .Build(workspace.PathOf("App/App.csproj"), new InventoryOptions(workspace.RootPath, SdkPackagesDirectory: cache))
+                .Projects.Single();
+
+            await Assert.That(app.Blockers).IsEmpty();
+            PropertyState isPackable = app.TargetFrameworks.Single().GetProperty("IsPackable")!;
+            await Assert.That(isPackable.Value).IsEqualTo("false");
+            await Assert.That(Path.GetFullPath(isPackable.Definition!.Location.File)).StartsWith(cache);
+            await Assert.That(isPackable.Definition.IsRepositoryFile).IsFalse();
+            await Assert.That(app.Imports.Select(i => i.File)).DoesNotContain(f => f.StartsWith(cache.Replace('\\', '/'), StringComparison.Ordinal));
+            await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
+        }
+        finally
+        {
+            if (Directory.Exists(cache))
+            {
+                Directory.Delete(cache, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public async Task VersionedSdkPackage_IsNeverExtractedIntoTheRepository_EvenWhenNuGetConfigPutsThePackagesFolderThere()
+    {
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the SDK package location is not under this test's control.");
+            return;
+        }
+
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-sdk-cache", Guid.NewGuid().ToString("N"));
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("NuGet.config", LocalFeedNuGetConfig)
+            .WriteProject("App/App.csproj", """  <Sdk Name="Local.Test.Sdk" Version="1.0.0" />""");
+        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", SdkProps);
+        string before = Fixtures.FixtureWorkspace.ComputeHash(workspace.RootPath);
+
+        try
+        {
+            ProjectInventory app = InventoryBuilder
+                .Build(workspace.PathOf("App/App.csproj"), new InventoryOptions(workspace.RootPath, SdkPackagesDirectory: cache))
+                .Projects.Single();
+
+            // The SDK was still resolved (from the redirected folder), but nothing was written into the repository.
+            await Assert.That(app.TargetFrameworks.Single().GetProperty("IsPackable")!.Value).IsEqualTo("false");
+            await Assert.That(Directory.Exists(workspace.PathOf("packages"))).IsFalse();
+            await Assert.That(Fixtures.FixtureWorkspace.ComputeHash(workspace.RootPath)).IsEqualTo(before);
+            await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
+        }
+        finally
+        {
+            if (Directory.Exists(cache))
+            {
+                Directory.Delete(cache, recursive: true);
+            }
+        }
+    }
+
+    // EnableTUnitRunner is one of the properties the result exposes (and, unlike IsPackable, has no SDK default), and MSBuild captures the
+    // environment when evaluation starts, so this shows what NUGET_PACKAGES was while the project was evaluated.
+    private const string ShowNuGetPackages = "  <PropertyGroup>\n    <EnableTUnitRunner>$(NUGET_PACKAGES)</EnableTUnitRunner>\n  </PropertyGroup>";
+
+    private static string NuGetPackagesWhileEvaluating(ScenarioWorkspace workspace, InventoryOptions? options = null) =>
+        InventoryBuilder.Build(workspace.PathOf("App/App.csproj"), options ?? new InventoryOptions(workspace.RootPath))
+            .Projects.Single().TargetFrameworks.Single().GetProperty("EnableTUnitRunner")!.Value;
+
+    [Test]
+    [Arguments("NuGet.config")]
+    [Arguments("nuget.config")]
+    [Arguments("NuGet.Config")]
+    public async Task NuGetPackages_IsRedirectedToTheDefault_WhenANuGetConfigSetsGlobalPackagesFolder(string fileName)
+    {
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
+            return;
+        }
+
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write(fileName, LocalFeedNuGetConfig)
+            .WriteProject("App/App.csproj", ShowNuGetPackages);
+
+        string seen = NuGetPackagesWhileEvaluating(workspace);
+
+        await Assert.That(seen).IsEqualTo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages"));
+        await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
+    }
+
+    [Test]
+    public async Task NuGetPackages_IsNotTouched_WhenNoNuGetConfigSetsGlobalPackagesFolder()
+    {
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
+            return;
+        }
+
+        // A NuGet.config that only configures sources cannot move the packages folder, so the environment must stay untouched.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("NuGet.config", "<configuration>\n  <packageSources>\n    <clear />\n    <add key=\"local\" value=\"feed\" />\n  </packageSources>\n</configuration>")
+            .WriteProject("App/App.csproj", ShowNuGetPackages);
+
+        await Assert.That(NuGetPackagesWhileEvaluating(workspace)).IsEmpty();
+        await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
+    }
+
+    [Test]
+    public async Task NuGetPackages_IsNotTouched_WhenThereIsNoNuGetConfigAtAll()
+    {
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
+            return;
+        }
+
+        using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject("App/App.csproj", ShowNuGetPackages);
+
+        await Assert.That(NuGetPackagesWhileEvaluating(workspace)).IsEmpty();
+    }
+
+    [Test]
+    public async Task NuGetPackages_UsesAnExplicitDirectory_EvenWithoutANuGetConfig()
+    {
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
+            return;
+        }
+
+        string directory = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-explicit-packages");
+        using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject("App/App.csproj", ShowNuGetPackages);
+
+        string seen = NuGetPackagesWhileEvaluating(workspace, new InventoryOptions(workspace.RootPath, SdkPackagesDirectory: directory));
+
+        await Assert.That(seen).IsEqualTo(directory);
+        await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
+    }
+
+    [Test]
+    public async Task UnconditionalMissingImportInsideAVersionedSdk_IsReported_NotDroppedBecauseTheFileIsExternal()
+    {
+        // Who owns a file decides where a fix would go, not whether MSBuild's picture of the project is complete.
+        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
+        {
+            Skip.Test("NUGET_PACKAGES is set, so the SDK package location is not under this test's control.");
+            return;
+        }
+
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-sdk-cache", Guid.NewGuid().ToString("N"));
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("NuGet.config", LocalFeedNuGetConfig)
+            .WriteProject("App/App.csproj", """  <Sdk Name="Local.Test.Sdk" Version="1.0.0" />""");
+        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", "<Project>\n  <Import Project=\"does-not-exist.props\" />\n</Project>");
+
+        try
+        {
+            ProjectInventory app = InventoryBuilder
+                .Build(workspace.PathOf("App/App.csproj"), new InventoryOptions(workspace.RootPath, SdkPackagesDirectory: cache))
+                .Projects.Single();
+
+            InventoryBlocker blocker = app.Blockers.Single(b => b.Code == BlockerCode.MissingImport);
+            await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+            await Assert.That(blocker.Message).Contains("does-not-exist.props");
+            await Assert.That(app.Classification).IsEqualTo(ProjectClassification.Unknown);
+            await Assert.That(Environment.GetEnvironmentVariable("NUGET_PACKAGES")).IsNull();
+        }
+        finally
+        {
+            if (Directory.Exists(cache))
+            {
+                Directory.Delete(cache, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>Writes a minimal MSBuild SDK package (<c>Sdk/Sdk.props</c> and <c>Sdk/Sdk.targets</c>) to a local feed.</summary>
+    private static void WriteSdkPackage(string feed, string id, string version, string props)
+    {
+        Directory.CreateDirectory(feed);
+        using ZipArchive package = ZipFile.Open(Path.Combine(feed, $"{id.ToLowerInvariant()}.{version}.nupkg"), ZipArchiveMode.Create);
+        Add($"{id}.nuspec", $"""
+            <?xml version="1.0"?>
+            <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+              <metadata>
+                <id>{id}</id>
+                <version>{version}</version>
+                <authors>tests</authors>
+                <description>Test SDK</description>
+                <packageTypes>
+                  <packageType name="MSBuildSdk" />
+                </packageTypes>
+              </metadata>
+            </package>
+            """);
+        Add("Sdk/Sdk.props", props);
+        Add("Sdk/Sdk.targets", "<Project />");
+
+        void Add(string entryName, string content)
+        {
+            using StreamWriter writer = new(package.CreateEntry(entryName).Open());
+            writer.Write(content);
+        }
+    }
+
+    [Test]
+    public async Task InlineVersion_SuppliedByAnUpdate_PointsAtTheUpdate()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                """
+                  <ItemGroup>
+                    <PackageReference Include="NUnit" Version="1.0.0" />
+                    <PackageReference Update="NUnit" Version="2.0.0" />
+                  </ItemGroup>
+                """);
+
+        PackageReferenceState nunit = workspace.Inventory("App/App.csproj").Projects.Single().TargetFrameworks.Single().Packages.Single();
+
+        await Assert.That(nunit.Version).IsEqualTo("2.0.0");
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.Inline);
+        await Assert.That(nunit.Definition.Location.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "Include=\"NUnit\""));
+        await Assert.That(nunit.VersionDefinition!.Location.File).IsEqualTo("App/App.csproj");
+        int update = workspace.LineOf("App/App.csproj", "Update=\"NUnit\"");
+        await Assert.That(nunit.VersionDefinition.Location.Line).IsEqualTo(update);
+        await Assert.That(nunit.Modifiers.Select(m => m.Location.Line)).IsEquivalentTo([update]);
+    }
+
+    [Test]
+    public async Task CentralVersion_SuppliedByAnUpdate_PointsAtTheUpdate()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                    <PackageVersion Update="NUnit" Version="4.9.0" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("NUnit"));
+
+        PackageReferenceState nunit = workspace.Inventory("App/App.csproj").Projects.Single().TargetFrameworks.Single().Packages.Single();
+
+        await Assert.That(nunit.Version).IsEqualTo("4.9.0");
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.Central);
+        await Assert.That(nunit.VersionDefinition!.Location.File).IsEqualTo("Directory.Packages.props");
+        await Assert.That(nunit.VersionDefinition.Location.Line).IsEqualTo(workspace.LineOf("Directory.Packages.props", "Update=\"NUnit\""));
+    }
+
+    [Test]
+    public async Task PackageVersion_IsIgnored_WhenCentralPackageManagementIsOff()
+    {
+        // NuGet ignores PackageVersion items unless ManagePackageVersionsCentrally is true.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("NUnit"));
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(nunit.Version).IsNull();
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.UnresolvedPackageVersion]);
+    }
+
+    [Test]
+    public async Task DuplicatePackageVersion_IsAmbiguous_NotResolvedByOverwriting()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.0.0" />
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("NUnit"));
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        InventoryBlocker duplicate = project.Blockers.Single(b => b.Code == BlockerCode.DuplicatePackageVersion);
+        await Assert.That(duplicate.RelatedLocations.Select(l => (l.File, l.Line))).IsEquivalentTo(
+            [("Directory.Packages.props", workspace.LineOf("Directory.Packages.props", "4.0.0")), ("Directory.Packages.props", workspace.LineOf("Directory.Packages.props", "4.3.2"))],
+            CollectionOrdering.Matching);
+        await Assert.That(project.TargetFrameworks.Single().Packages.Single().VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.DuplicatePackageVersion, BlockerCode.UnresolvedPackageVersion]);
+    }
+
+    private const string CentralPackages =
+        "<Project>\n  <PropertyGroup>\n    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>\n  </PropertyGroup>\n"
+        + "  <ItemGroup>\n    <PackageVersion Include=\"Ext.Pkg\" Version=\"1.0.0\" />\n    <PackageVersion Include=\"Local.Pkg\" Version=\"1.0.0\" />\n  </ItemGroup>\n</Project>";
+
+    [Test]
+    public async Task RepositoryUpdateOfAnExternallyDeclaredReference_UnderCentralManagement_IsReportedAtTheUpdate()
+    {
+        // The reference is declared in a file outside the repository (here: inside the NuGet packages folder), but the offending
+        // Version comes from a repository-owned Update, so that is where the blocker belongs.
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-ext-cache", Guid.NewGuid().ToString("N"));
+        string external = Path.Combine(cache, "ext.props");
+        Directory.CreateDirectory(cache);
+        File.WriteAllText(external, "<Project>\n  <ItemGroup>\n    <PackageReference Include=\"Ext.Pkg\" />\n  </ItemGroup>\n</Project>");
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", CentralPackages)
+            .WriteProject(
+                "App/App.csproj",
+                $"  <Import Project=\"{external}\" />\n  <ItemGroup>\n    <PackageReference Update=\"Ext.Pkg\" Version=\"2.0.0\" />\n  </ItemGroup>");
+
+        string? previous = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        Environment.SetEnvironmentVariable("NUGET_PACKAGES", cache);
+        try
+        {
+            ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+            InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.InlineVersionUnderCentralManagement);
+            await Assert.That(blocker.Location!.File).IsEqualTo("App/App.csproj");
+            await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "Update=\"Ext.Pkg\""));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", previous);
+            Directory.Delete(cache, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task RepositoryVersionOverrideUpdate_OfAnExternallyDeclaredReference_IsReportedAtTheUpdate()
+    {
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-ext-cache", Guid.NewGuid().ToString("N"));
+        string external = Path.Combine(cache, "ext.props");
+        Directory.CreateDirectory(cache);
+        File.WriteAllText(external, "<Project>\n  <ItemGroup>\n    <PackageReference Include=\"Ext.Pkg\" />\n  </ItemGroup>\n</Project>");
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", CentralPackages.Replace(
+                "</ManagePackageVersionsCentrally>",
+                "</ManagePackageVersionsCentrally>\n    <CentralPackageVersionOverrideEnabled>false</CentralPackageVersionOverrideEnabled>"))
+            .WriteProject(
+                "App/App.csproj",
+                $"  <Import Project=\"{external}\" />\n  <ItemGroup>\n    <PackageReference Update=\"Ext.Pkg\" VersionOverride=\"2.0.0\" />\n  </ItemGroup>");
+
+        string? previous = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        Environment.SetEnvironmentVariable("NUGET_PACKAGES", cache);
+        try
+        {
+            ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+            InventoryBlocker blocker = project.Blockers.Single(b => b.Code == BlockerCode.IneffectiveVersionOverride);
+            await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+            await Assert.That(blocker.Location!.File).IsEqualTo("App/App.csproj");
+            await Assert.That(blocker.Location.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "Update=\"Ext.Pkg\""));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", previous);
+            Directory.Delete(cache, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task ExternalUpdateOfARepositoryReference_IsNotReportedAtTheRepositoryFile()
+    {
+        // The Version is set by a file the user does not own, so a blocker at the repository's Include would send them to the wrong place.
+        string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-ext-cache", Guid.NewGuid().ToString("N"));
+        string external = Path.Combine(cache, "ext.props");
+        Directory.CreateDirectory(cache);
+        File.WriteAllText(external, "<Project>\n  <ItemGroup>\n    <PackageReference Update=\"Local.Pkg\" Version=\"2.0.0\" />\n  </ItemGroup>\n</Project>");
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", CentralPackages)
+            .WriteProject(
+                "App/App.csproj",
+                $"  <ItemGroup>\n    <PackageReference Include=\"Local.Pkg\" />\n  </ItemGroup>\n  <Import Project=\"{external}\" />");
+
+        string? previous = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        Environment.SetEnvironmentVariable("NUGET_PACKAGES", cache);
+        try
+        {
+            ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+            await Assert.That(project.Blockers.Select(b => b.Code)).DoesNotContain(BlockerCode.InlineVersionUnderCentralManagement);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", previous);
+            Directory.Delete(cache, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task VersionOverride_IsIgnored_WhenCentralPackageManagementIsOff()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj", """
+                  <ItemGroup>
+                    <PackageReference Include="NUnit" VersionOverride="4.0.0" />
+                  </ItemGroup>
+                """);
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(nunit.Version).IsNull();
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo(
+            [BlockerCode.IneffectiveVersionOverride, BlockerCode.UnresolvedPackageVersion]);
+    }
+
+    [Test]
+    public async Task VersionOverride_NextToAnInlineVersion_WithoutCentralPackageManagement_LeavesTheInlineVersionEffective()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject("App/App.csproj", """
+                  <ItemGroup>
+                    <PackageReference Include="NUnit" Version="4.3.2" VersionOverride="4.0.0" />
+                  </ItemGroup>
+                """);
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.Inline);
+        await Assert.That(nunit.Version).IsEqualTo("4.3.2");
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.IneffectiveVersionOverride]);
+    }
+
+    [Test]
+    public async Task VersionOverride_WhenOverridesAreDisabled_IsAnError_AndNotFallenBackToTheCentralVersion()
+    {
+        // NuGet fails restore (NU1013) instead of ignoring the override, so no version is effective.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                    <CentralPackageVersionOverrideEnabled>false</CentralPackageVersionOverrideEnabled>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", """
+                  <ItemGroup>
+                    <PackageReference Include="NUnit" VersionOverride="4.0.0" />
+                  </ItemGroup>
+                """);
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(nunit.Version).IsNull();
+        InventoryBlocker blocker = project.Blockers.Single();
+        await Assert.That(blocker.Code).IsEqualTo(BlockerCode.IneffectiveVersionOverride);
+        await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+    }
+
+    [Test]
+    [Arguments("true", true)]
+    [Arguments("yes", true)]
+    [Arguments("!false", true)]
+    [Arguments(" true ", false)]
+    [Arguments("false", false)]
+    public async Task CentralPackageManagement_IsOn_ExactlyWhenNuGetConsidersItOn(string value, bool expectedOn)
+    {
+        // NuGet.targets compares the property with == 'true' (an MSBuild boolean comparison, so yes/!false count but a padded
+        // value does not), and restore then reads the result literally.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", $"""
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>{value}</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences("NUnit"));
+
+        PackageReferenceState nunit = workspace.Inventory("App/App.csproj").Projects.Single().TargetFrameworks.Single().Packages.Single();
+
+        await Assert.That(nunit.VersionSource).IsEqualTo(expectedOn ? PackageVersionSource.Central : PackageVersionSource.None);
+        await Assert.That(nunit.Version).IsEqualTo(expectedOn ? "4.3.2" : null);
+    }
+
+    [Test]
+    public async Task CentralPackageManagement_WithoutAnImportedDirectoryPackagesProps_IsOff()
+    {
+        // NuGet only enables central management when Directory.Packages.props was imported; a PackageVersion declared elsewhere is ignored.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                $"""
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                {ScenarioWorkspace.PackageReferences("NUnit")}
+                """);
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.UnresolvedPackageVersion]);
+    }
+
+    [Test]
+    [Arguments("off")]
+    [Arguments("no")]
+    public async Task VersionOverride_IsAllowed_UnlessOverridesAreDisabledWithTheLiteralFalse(string value)
+    {
+        // NuGet disables overrides only for the literal (trimmed) "false"; other MSBuild false spellings leave them enabled.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", $"""
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                    <CentralPackageVersionOverrideEnabled>{value}</CentralPackageVersionOverrideEnabled>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", """
+                  <ItemGroup>
+                    <PackageReference Include="NUnit" VersionOverride="4.0.0" />
+                  </ItemGroup>
+                """);
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState nunit = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(nunit.VersionSource).IsEqualTo(PackageVersionSource.VersionOverride);
+        await Assert.That(nunit.Version).IsEqualTo("4.0.0");
+        await Assert.That(project.Blockers).IsEmpty();
+    }
+
+    [Test]
+    public async Task InlineVersion_UnderCentralPackageManagement_IsAnError_AndNotAnEffectiveVersion()
+    {
+        // NU1008: a PackageReference must not carry Version when central management is on.
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="MSTest" Version="4.0.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj", ScenarioWorkspace.PackageReferences(new PackageRef("MSTest", "4.0.2")));
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState mstest = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(mstest.VersionSource).IsEqualTo(PackageVersionSource.None);
+        await Assert.That(mstest.Version).IsNull();
+        InventoryBlocker blocker = project.Blockers.Single();
+        await Assert.That(blocker.Code).IsEqualTo(BlockerCode.InlineVersionUnderCentralManagement);
+        await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+        await Assert.That(blocker.Location!.Line).IsEqualTo(workspace.LineOf("App/App.csproj", "Include=\"MSTest\""));
+
+        // The declaration is invalid for NuGet, but MSBuild's picture of the project is complete, so it is still classified.
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.TestApplication);
+    }
+
+    [Test]
+    public async Task GlobalPackageReferenceVersion_UnderCentralPackageManagement_IsValid()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <GlobalPackageReference Include="Some.Analyzer" Version="1.2.3" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject("App/App.csproj");
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        PackageReferenceState analyzer = project.TargetFrameworks.Single().Packages.Single();
+        await Assert.That(analyzer.IsGlobal).IsTrue();
+        await Assert.That(analyzer.Version).IsEqualTo("1.2.3");
+        await Assert.That(analyzer.VersionSource).IsEqualTo(PackageVersionSource.Inline);
+        await Assert.That(project.Blockers).IsEmpty();
+    }
+
+    [Test]
+    public async Task PropertyNames_AreCaseInsensitive_AndReportedCanonically()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "Tool/Tool.csproj",
+                $"""
+                  <PropertyGroup>
+                    <isTestProject>false</isTestProject>
+                  </PropertyGroup>
+                {ScenarioWorkspace.PackageReferences(new PackageRef("MSTest", "4.0.2"))}
+                """);
+
+        ProjectInventory project = workspace.Inventory("Tool/Tool.csproj").Projects.Single();
+
+        PropertyState property = project.TargetFrameworks.Single().GetProperty("IsTestProject")!;
+        await Assert.That(property.Name).IsEqualTo("IsTestProject");
+        await Assert.That(property.Value).IsEqualTo("false");
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Production);
+        await Assert.That(project.HasTestLibraryDependency).IsTrue();
+    }
+
+    [Test]
+    public async Task ItemTypes_AreCaseInsensitive_ForConditionAnalysis()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(
+                "App/App.csproj",
+                """
+                  <ItemGroup Condition="'$(VSTEST_TO_MTP_UNSET_FLAG)' == 'true'">
+                    <packagereference Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                """);
+
+        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
+
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.ConditionDependsOnUnsetProperty]);
+    }
+}

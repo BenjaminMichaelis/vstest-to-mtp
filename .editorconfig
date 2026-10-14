@@ -32,6 +32,10 @@ insert_final_newline = true
 #### .NET Coding Conventions ####
 [*.{cs,vb}]
 
+# The inventory keeps one public namespace (VsTestToMtp.Inventory) and uses folders (Model, Evaluation, Discovery,
+# Classification) only to organise files, so the namespace deliberately does not match the folder.
+dotnet_style_namespace_match_folder = false
+
 # Organize usings
 dotnet_separate_import_directive_groups = true
 dotnet_sort_system_directives_first = true
