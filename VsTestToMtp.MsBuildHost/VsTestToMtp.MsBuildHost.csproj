@@ -16,7 +16,7 @@
     <IsPackable>false</IsPackable>
     <!-- Run on a newer machine runtime when one is installed: a newer SDK's MSBuild needs at least the runtime it shipped with. -->
     <RollForward>LatestMajor</RollForward>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Globalization stays on (the default): projects can use culture-dependent property functions, which the SDK's own msbuild evaluates. -->
   </PropertyGroup>
 
   <ItemGroup>

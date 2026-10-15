@@ -72,6 +72,10 @@ public class InventoryEnvironmentTests
             .Write("global.json", Pin(newer.Version))
             .WriteProject("App/App.csproj");
 
+        // The host normally rolls forward to a newer installed runtime (which makes such an SDK usable); pin it to this runtime's
+        // major so the refusal is deterministic whatever else is installed. The roll-forward itself is covered by the host's
+        // RollForward setting, not by this test.
+        using EnvironmentVariableScope pinned = new("DOTNET_ROLL_FORWARD", "Minor");
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
@@ -82,23 +86,15 @@ public class InventoryEnvironmentTests
     public async Task MsBuildHostThatCannotBeStarted_IsReportedAsMsBuildHostFailed()
     {
         // The test layout has no self-contained host to fall back to, so a machine without a usable `dotnet` has nowhere to run it.
-        string? previous = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
-        Environment.SetEnvironmentVariable("DOTNET_HOST_PATH", Path.Combine(Path.GetTempPath(), "no-such-dotnet-" + Guid.NewGuid().ToString("N")));
-        try
-        {
-            using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject("App/App.csproj");
+        using EnvironmentVariableScope noDotNet = new("DOTNET_HOST_PATH", Path.Combine(Path.GetTempPath(), "no-such-dotnet-" + Guid.NewGuid().ToString("N")));
+        using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject("App/App.csproj");
 
-            InventoryResult result = workspace.Inventory("App/App.csproj");
+        InventoryResult result = workspace.Inventory("App/App.csproj");
 
-            ProjectInventory project = result.Projects.Single();
-            await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-            await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
-            await Assert.That(result.Blockers.Select(b => b.Code)).Contains(BlockerCode.MsBuildHostFailed);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("DOTNET_HOST_PATH", previous);
-        }
+        ProjectInventory project = result.Projects.Single();
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
+        await Assert.That(result.Blockers.Select(b => b.Code)).Contains(BlockerCode.MsBuildHostFailed);
     }
 
     private const int MinimumSdkMajorVersion = 8;

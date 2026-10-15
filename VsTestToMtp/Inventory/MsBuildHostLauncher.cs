@@ -27,9 +27,11 @@ internal static class MsBuildHostLauncher
     // The process could not be started at all (for example there is no `dotnet` on the machine).
     private const int NotStarted = -1;
 
-    public static HostResponse Run(HostRequest request)
+    /// <param name="request">What to evaluate.</param>
+    /// <param name="baseDirectory">Where the host folders are laid out; the CLI's own directory unless a test supplies one.</param>
+    public static HostResponse Run(HostRequest request, string? baseDirectory = null)
     {
-        string baseDirectory = AppContext.BaseDirectory;
+        baseDirectory ??= AppContext.BaseDirectory;
         string frameworkHost = Path.Combine(baseDirectory, FrameworkDirectory, HostName + ".dll");
         string bundledHost = Path.Combine(baseDirectory, BundledDirectory, HostName + (OperatingSystem.IsWindows() ? ".exe" : string.Empty));
         bool hasFramework = File.Exists(frameworkHost);
@@ -55,8 +57,33 @@ internal static class MsBuildHostLauncher
             }
         }
 
+        EnsureExecutable(bundledHost);
         (HostResponse? bundled, _, string bundledError) = TryRun(bundledHost, [], request);
         return bundled ?? Failure(request, bundledError, "Reinstall vstest-to-mtp.");
+    }
+
+    // Package content does not keep the execute bit on Linux/macOS (the SDK only makes the tool's own entry point executable),
+    // so the bundled apphost must be made executable before it can be started.
+    private static void EnsureExecutable(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            UnixFileMode mode = File.GetUnixFileMode(path);
+            UnixFileMode execute = UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+            if ((mode & execute) != execute)
+            {
+                File.SetUnixFileMode(path, mode | execute);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Starting it reports the real problem (permission denied) as an MsBuildHostFailed blocker.
+        }
     }
 
     private static bool IsRuntimeUnavailable(int exitCode) => exitCode is NotStarted or FrameworkMissingWindows or FrameworkMissingUnix;
