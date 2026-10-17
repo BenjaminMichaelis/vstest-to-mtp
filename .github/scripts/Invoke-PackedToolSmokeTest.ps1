@@ -25,6 +25,8 @@ $nugetConfig = Join-Path $toolPath 'NuGet.config'
   <packageSources>
     <clear />
     <add key="local" value="$PackageDirectory" />
+    <!-- Only for apphost packs: installing a managed tool (the any package) generates its launcher from one when the SDK has no copy. -->
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
   </packageSources>
 </configuration>
 "@ | Set-Content -Path $nugetConfig
@@ -37,6 +39,12 @@ function Invoke-Checked {
         throw "$FilePath $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
     }
 }
+
+Write-Host "::group::Environment"
+if (-not $IsWindows) { Write-Host "uname -m: $(uname -m)" }
+Write-Host "dotnet: $((Get-Command dotnet).Source)"
+dotnet --info | Select-String -Pattern 'RID:|Architecture:|Version:' | ForEach-Object { Write-Host $_.Line }
+Write-Host '::endgroup::'
 
 $installDirectory = Join-Path $toolPath 'tool'
 $version = (Get-ChildItem $PackageDirectory -Filter 'vstest-to-mtp.*.nupkg' |
@@ -56,11 +64,11 @@ if (-not $tool) { throw "No vstest-to-mtp command was installed into '$installDi
 $isAot = $Rid -ne 'any'
 
 Write-Host "::group::Installed layout"
-Get-ChildItem $installDirectory -Recurse -Directory | Where-Object { $_.Name -like 'msbuild-host*' } | ForEach-Object { Write-Host $_.FullName }
+Get-ChildItem $installDirectory -Recurse -Force -Directory | Where-Object { $_.Name -like 'msbuild-host*' } | ForEach-Object { Write-Host $_.FullName }
 Write-Host '::endgroup::'
 
 # An AOT build is a native executable; the fallback is a managed .NET tool. Check the package is the kind we think it is.
-$nativeFiles = @(Get-ChildItem $installDirectory -Recurse -File -Filter 'vstest-to-mtp.dll')
+$nativeFiles = @(Get-ChildItem $installDirectory -Recurse -Force -File -Filter 'vstest-to-mtp.dll')
 if ($isAot -and $nativeFiles.Count -ne 0) { throw "The $Rid package contains vstest-to-mtp.dll, so it is not a Native AOT build." }
 if (-not $isAot -and $nativeFiles.Count -eq 0) { throw 'The any package has no vstest-to-mtp.dll, so it is not the CoreCLR fallback.' }
 
