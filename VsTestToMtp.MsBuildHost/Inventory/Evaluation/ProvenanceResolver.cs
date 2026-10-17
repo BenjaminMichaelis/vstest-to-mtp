@@ -59,6 +59,8 @@ internal sealed class ProvenanceResolver
     public SourceLocation LocationOf(ProjectElement element) =>
         _formatter.Location(element.Location.File, element.Location.Line, element.Location.Column);
 
+    public SourceLocation LocationOf(string file, int line, int column) => _formatter.Location(file, line, column);
+
     public static string? JoinConditions(ProjectElement element)
     {
         List<string> conditions = Conditions(element);

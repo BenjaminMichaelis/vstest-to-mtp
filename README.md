@@ -2,7 +2,7 @@
 
 A .NET global tool that migrates .NET test projects from [VSTest](https://github.com/microsoft/vstest) to [Microsoft.Testing.Platform (MTP)](https://learn.microsoft.com/dotnet/core/testing/microsoft-testing-platform-intro) for use with `dotnet test`.
 
-> **Status:** This is an early scaffold. The CLI entry point, packaging and CI are set up. The read-only project inventory (see below) exists as a library, but no migration behavior has been implemented yet.
+> **Status:** This is an early scaffold. The CLI entry point, packaging and CI are set up. The read-only project inventory and the compatibility preflight (see below) exist as a library, but nothing is migrated yet.
 
 ## Install
 
@@ -35,6 +35,12 @@ dotnet run --project VsTestToMtp -- --help
 Evaluation uses the .NET SDK's MSBuild (located with `Microsoft.Build.Locator`, honoring `global.json`), so an installed SDK is required at runtime. Because the CLI is a Native AOT executable and cannot load managed MSBuild assemblies, evaluation runs in a separate CoreCLR process, `VsTestToMtp.MsBuildHost` (the `vstest-to-mtp-msbuild-host` program in the package), started once per inventory run: the CLI sends a JSON request on its standard input and reads a JSON response from a file (see `MsBuildHostLauncher`). It runs on the machine's .NET runtime when one is installed (rolling forward to a newer major) and falls back to a self-contained copy bundled with the AOT packages when it is not. Nothing in the repository is restored, built or written, and `obj/*.nuget.g.*` files are ignored so results do not depend on restore state. As with any MSBuild evaluation, an SDK referenced with a version (for example `MSTest.Sdk/3.6.4`) that is not in the NuGet cache yet is downloaded there, as `dotnet restore` would; set `MSBUILDDISABLENUGETSDKRESOLVER=1` to prevent that (such projects are then reported as blockers). This is also what keeps classification correct: `Microsoft.NET.Test.Sdk` sets `IsTestProject=true` for every project that references it once restored, so a production project that merely references it must not be treated as a test application on that basis.
 
 See [`docs/inventory-msbuild-usage.md`](docs/inventory-msbuild-usage.md) for the documented MSBuild API constraints, how the inventory complies, and what was verified against a real MSBuild.
+
+### Migration rules and compatibility preflight
+
+`VsTestToMtp.Migration.CompatibilityPreflight.Assess(inventory)` checks an inventory against a versioned, offline rule matrix (`MigrationRuleSet`) for Microsoft.Testing.Platform v2 on the .NET 10 SDK, before anything is changed. Each project is `Eligible`, `AlreadyMigrated`, `Blocked` or `NotATestApplication`, with the in-family package changes it needs (for example NUnit3TestAdapter 5 to 6, or `xunit.v3.mtp-off` to `xunit.v3.mtp-v2` at the same version) pointing at the exact `PackageReference` and version declaration to edit. MSTest, NUnit and xUnit v3 test applications keep their test framework and target framework; TUnit is recognized as already on MTP. xUnit v2, unsupported target frameworks, custom entry points, versions only a feed can resolve, unresolved MSBuild state and a selection that would mix VSTest and MTP test applications in one `dotnet test` run configuration are explicit error diagnostics, never silent rewrites; xUnit v2 is never moved to v3 and no project is retargeted.
+
+See [`docs/migration-rules.md`](docs/migration-rules.md) for the matrix, the evidence behind each threshold and what was run to verify the upgrade targets.
 
 ### VSTest migration fixtures
 
