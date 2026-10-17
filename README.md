@@ -47,12 +47,14 @@ See [`docs/inventory-msbuild-usage.md`](docs/inventory-msbuild-usage.md) for the
 [`fixtures/`](fixtures/README.md) contains checked-in MSTest, NUnit, xUnit v3 and xUnit v2 sample projects (each in plain and Central Package Management variants) generated from the official templates and running under VSTest. Converter tests work on isolated copies of them. CI builds and tests every fixture in place.
 ### Packing and installing locally
 
-The tool uses [RID-specific packaging](https://learn.microsoft.com/dotnet/core/tools/rid-specific-tools) with Native AOT for `win-x64`, `linux-x64` and `osx-arm64` and a portable CoreCLR `any` fallback. Native AOT compilation requires the build OS to match the target RID's OS, so each package is packed on its own platform (CI does this in a matrix):
+The tool uses [RID-specific packaging](https://learn.microsoft.com/dotnet/core/tools/rid-specific-tools) with Native AOT for `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64` and `osx-arm64` and a portable CoreCLR `any` fallback. Native AOT compilation requires the build OS to match the target RID's OS, so each package is packed on its own platform (CI does this in a matrix):
 
 ```cli
 dotnet pack --configuration Release -o ./artifacts/package/release                # pointer package (any platform)
-dotnet pack -r win-x64 --configuration Release -o ./artifacts/package/release     # on Windows
+dotnet pack -r win-x64 --configuration Release -o ./artifacts/package/release     # on Windows (x64 or Arm64 hosts)
+dotnet pack -r win-arm64 --configuration Release -o ./artifacts/package/release   # on Windows
 dotnet pack -r linux-x64 --configuration Release -o ./artifacts/package/release   # on Linux
+dotnet pack -r linux-arm64 --configuration Release -o ./artifacts/package/release # on Linux
 dotnet pack -r osx-arm64 --configuration Release -o ./artifacts/package/release   # on macOS (Apple silicon)
 dotnet pack -r any --configuration Release -o ./artifacts/package/release         # portable CoreCLR fallback
 ```
@@ -61,6 +63,7 @@ This creates:
 
 - `vstest-to-mtp.win-x64.<version>.nupkg` (Native AOT, with the MSBuild host framework-dependent and self-contained)
 - `vstest-to-mtp.linux-x64.<version>.nupkg` (same)
+- `vstest-to-mtp.win-arm64.<version>.nupkg` and `vstest-to-mtp.linux-arm64.<version>.nupkg` (same)
 - `vstest-to-mtp.osx-arm64.<version>.nupkg` (same)
 - `vstest-to-mtp.any.<version>.nupkg` (portable CoreCLR fallback, framework-dependent MSBuild host)
 - `vstest-to-mtp.<version>.nupkg` (top-level pointer package)

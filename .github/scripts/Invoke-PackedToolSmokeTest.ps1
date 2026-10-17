@@ -1,7 +1,7 @@
 param(
     # The directory holding the nupkg files produced by `dotnet pack` (pointer package plus the RID package under test).
     [Parameter(Mandatory)][string]$PackageDirectory,
-    # The package under test: win-x64, linux-x64, osx-arm64 (Native AOT) or any (CoreCLR fallback).
+    # The package under test: win-x64, win-arm64, linux-x64, linux-arm64, osx-arm64 (Native AOT) or any (CoreCLR fallback).
     [Parameter(Mandatory)][string]$Rid,
     [string]$FixturesPath = (Join-Path $PSScriptRoot '../../fixtures'),
     [int]$ExpectedFixtureCount = 8
@@ -48,7 +48,7 @@ Write-Host '::endgroup::'
 
 $installDirectory = Join-Path $toolPath 'tool'
 $version = (Get-ChildItem $PackageDirectory -Filter 'vstest-to-mtp.*.nupkg' |
-    Where-Object { $_.Name -notmatch '\.(win-x64|linux-x64|osx-arm64|any)\.' } |
+    Where-Object { $_.Name -notmatch '\.(win-x64|win-arm64|linux-x64|linux-arm64|osx-arm64|any)\.' } |
     Select-Object -First 1).BaseName -replace '^vstest-to-mtp\.', ''
 # The pointer package resolves to the RID package for this machine. The any package is only chosen for platforms without a RID package,
 # so install it directly by id to test it on a platform that has one.

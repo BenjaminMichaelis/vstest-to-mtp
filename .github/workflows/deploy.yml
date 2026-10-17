@@ -23,7 +23,9 @@ jobs:
       matrix:
         include:
           - { os: windows-latest, rid: win-x64 }
+          - { os: windows-11-arm, rid: win-arm64 }
           - { os: ubuntu-latest, rid: linux-x64 }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64 }
           - { os: macos-latest, rid: osx-arm64 }
           - { os: ubuntu-latest, rid: any }
           - { os: ubuntu-latest, rid: pointer }
@@ -34,6 +36,11 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           global-json-file: "./global.json"
+
+      # Native AOT links with the platform toolchain.
+      - name: Install Native AOT prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
 
       - name: Restore dependencies
         run: dotnet restore
@@ -101,7 +108,7 @@ jobs:
       - name: Push RID-specific NuGet packages
         run: |
           $version = "${{ github.ref }}".substring(11)
-          foreach ($rid in @("win-x64", "linux-x64", "osx-arm64", "any")) {
+          foreach ($rid in @("win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-arm64", "any")) {
             $pkg = "vstest-to-mtp.$rid.$version.nupkg"
             if (Test-Path $pkg) {
               dotnet nuget push $pkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate

@@ -32,21 +32,29 @@
 
     Build steps (AOT compilation needs the build OS to match the target RID's OS, so run each on its own OS in a CI matrix):
       dotnet pack                  # pointer package (any platform)
-      dotnet pack -r win-x64       # Native AOT on Windows
-      dotnet pack -r linux-x64     # Native AOT on Linux
+      dotnet pack -r win-x64       # Native AOT on Windows x64
+      dotnet pack -r win-arm64     # Native AOT on Windows Arm64
+      dotnet pack -r linux-x64     # Native AOT on Linux x64
+      dotnet pack -r linux-arm64   # Native AOT on Linux Arm64
       dotnet pack -r osx-arm64     # Native AOT on macOS arm64
       dotnet pack -r any           # CoreCLR fallback (any platform)
 
     Note: NU5017 is a NuGet validation false positive on the pointer package; all packages are created correctly.
     -->
-    <ToolPackageRuntimeIdentifiers>win-x64;linux-x64;osx-arm64;any</ToolPackageRuntimeIdentifiers>
-    <RuntimeIdentifiers>win-x64;linux-x64;osx-arm64;any</RuntimeIdentifiers>
+    <ToolPackageRuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-arm64;any</ToolPackageRuntimeIdentifiers>
     <!--
     With PublishAot on, a plain `dotnet pack` only produces the pointer package and each RID package needs its own `-r` pack
     (on its own OS); with it off, one pack would build every RID package as CoreCLR on this OS. The `any` fallback is not AOT.
     -->
     <PublishAot>true</PublishAot>
     <PublishAot Condition="'$(RuntimeIdentifier)' == 'any'">false</PublishAot>
+
+    <!--
+    Smaller, ICU-free Native AOT executables (the CLI only prints JSON and reads files). The MSBuild host is a separate process and keeps
+    full globalization, see its project file.
+    -->
+    <InvariantGlobalization Condition="'$(PublishAot)' == 'true'">true</InvariantGlobalization>
+    <IlcOptimizationPreference Condition="'$(PublishAot)' == 'true'">Size</IlcOptimizationPreference>
 
     <!--
     Evaluating projects needs the .NET SDK's managed MSBuild, which a Native AOT executable cannot load. That work runs in a separate
