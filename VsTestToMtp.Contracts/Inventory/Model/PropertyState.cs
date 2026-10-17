@@ -17,6 +17,6 @@ public sealed record PropertyState(
     IReadOnlyList<Provenance> Overridden)
 {
     /// <summary>The property called <paramref name="name"/> (MSBuild property names are case-insensitive), or <see langword="null"/> when it is not defined.</summary>
-    internal static PropertyState? Find(IReadOnlyList<PropertyState> properties, string name) =>
+    public static PropertyState? Find(IReadOnlyList<PropertyState> properties, string name) =>
         properties.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
 }
