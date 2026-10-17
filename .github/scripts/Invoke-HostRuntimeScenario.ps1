@@ -3,76 +3,26 @@ param(
     [Parameter(Mandatory)][string]$PackageDirectory,
     # The Native AOT package under test: win-x64 or linux-x64 (the scenarios need an OS that can install old SDKs side by side).
     [Parameter(Mandatory)][string]$Rid,
-    # One of the scenario names in $scenarios below.
-    [Parameter(Mandatory)][string]$Scenario,
+    # The scenario as JSON, from New-HostRuntimeScenarioPlan.ps1: { name, installs: [{ major, runtimeOnly? }], pinMajor }.
+    [Parameter(Mandatory)][string]$Spec,
     [string]$FixtureRoot = (Join-Path $PSScriptRoot '../../fixtures/mstest/plain')
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Runs the packed tool on a machine that has exactly one set of .NET installs and checks what each --host-runtime does there:
+# Runs the packed tool on a machine that has exactly the .NET installs the scenario asks for, and checks what each --host-runtime does there:
 #   auto    the machine's runtime unless the bundled one is newer
 #   machine only the installed runtime
 #   bundled only the runtime shipped inside the package
-# Expected outcomes: 'ok' (a clean inventory), a blocker code the inventory must report, or 'cannot-run' (the command itself fails, e.g.
-# the portable package needs a .NET 10 runtime to start at all). Each scenario is an isolated dotnet root; nothing else on the runner is visible.
+# The expected outcome is derived from what actually got installed (stable runtimes, the pinned SDK), the bundled runtime and the oldest
+# supported SDK, so it stays right when a preview becomes stable or the tool is retargeted. An outcome is 'ok' (a clean inventory), a blocker
+# code the inventory must report, or 'cannot-run' (the command itself fails: the portable package needs a machine runtime to start at all).
 
+$scenario = $Spec | ConvertFrom-Json
+$name = $scenario.name
 $modes = @('auto', 'machine', 'bundled')
-
-# Install: what goes into the isolated root. Pin: the global.json the repository would have (null = the fixture's own).
-# Aot / Any: expected outcome per mode (auto, machine, bundled) for the Native AOT package and the portable `any` package.
-$scenarios = [ordered]@{
-    'sdk10' = @{
-        Install = @(@{ Channel = '10.0' }); Pin = $null
-        Aot = @('ok', 'ok', 'ok'); Any = @('ok', 'ok', 'MsBuildHostFailed')
-    }
-    'sdk9' = @{
-        # No runtime 10 on the machine: only the bundled runtime can run the host, and it loads SDK 9's MSBuild.
-        Install = @(@{ Channel = '9.0' }); Pin = @{ version = '9.0.100'; rollForward = 'latestFeature' }
-        Aot = @('ok', 'MsBuildHostFailed', 'ok'); Any = @('cannot-run', 'cannot-run', 'cannot-run')
-    }
-    'sdk8' = @{
-        # The oldest SDK whose MSBuild we support.
-        Install = @(@{ Channel = '8.0' }); Pin = @{ version = '8.0.100'; rollForward = 'latestFeature' }
-        Aot = @('ok', 'MsBuildHostFailed', 'ok'); Any = @('cannot-run', 'cannot-run', 'cannot-run')
-    }
-    'sdk6' = @{
-        # Not supported: the SDK is older than the oldest we can load. The bundled runtime is what reports it; the machine one cannot even run the host.
-        Install = @(@{ Channel = '6.0' }); Pin = @{ version = '6.0.100'; rollForward = 'latestFeature' }
-        Aot = @('MsBuildSdkUnsupported', 'MsBuildHostFailed', 'MsBuildSdkUnsupported'); Any = @('cannot-run', 'cannot-run', 'cannot-run')
-    }
-    'sdk9-and-10' = @{
-        # Both installed, the repository pins 9: the machine's runtime 10 runs the host, which loads SDK 9's MSBuild.
-        Install = @(@{ Channel = '9.0' }, @{ Channel = '10.0' }); Pin = @{ version = '9.0.100'; rollForward = 'latestFeature' }
-        Aot = @('ok', 'ok', 'ok'); Any = @('ok', 'ok', 'MsBuildHostFailed')
-    }
-    'sdk10-and-11' = @{
-        # A newer major side by side (skipped until a stable .NET 11 can be installed). The repository pins 11: the machine's runtime 11 runs the
-        # host, but the bundled runtime 10 cannot load SDK 11's MSBuild.
-        Install = @(@{ Channel = '10.0' }, @{ Channel = '11.0' }); Pin = @{ version = '11.0.100'; rollForward = 'latestFeature' }; SkipWhenUnavailable = $true
-        Aot = @('ok', 'ok', 'MsBuildSdkNewerThanRuntime'); Any = @('ok', 'ok', 'MsBuildHostFailed')
-    }
-    'sdk10-and-newest-11' = @{
-        # A newer major next to the one the repository uses, whatever its quality today (a release candidate now, stable later): the host must keep
-        # working. A pre-release runtime is ignored by roll-forward (the host stays on 10); once 11 is stable the host runs on 11 and loads SDK 10's MSBuild.
-        Install = @(@{ Channel = '10.0' }, @{ Channel = '11.0' }); Pin = $null
-        Aot = @('ok', 'ok', 'ok'); Any = @('ok', 'ok', 'MsBuildHostFailed')
-    }
-    'runtime10-no-sdk' = @{
-        # A runtime but no SDK: the host runs, then finds no MSBuild to load.
-        Install = @(@{ Channel = '10.0'; RuntimeOnly = $true }); Pin = $null
-        Aot = @('MsBuildNotFound', 'MsBuildNotFound', 'MsBuildNotFound'); Any = @('MsBuildNotFound', 'MsBuildNotFound', 'MsBuildHostFailed')
-    }
-    'no-dotnet' = @{
-        # Nothing installed: the bundled host starts (it needs no machine runtime) and reports the missing SDK; the machine host has no `dotnet`.
-        Install = @(); Pin = $null
-        Aot = @('MsBuildNotFound', 'MsBuildHostFailed', 'MsBuildNotFound'); Any = @('cannot-run', 'cannot-run', 'cannot-run')
-    }
-}
-
-if (-not $scenarios.Contains($Scenario)) { throw "Unknown scenario '$Scenario'. Known: $($scenarios.Keys -join ', ')." }
-$plan = $scenarios[$Scenario]
+$minimumSdk = [int]$scenario.minimumSdk
 
 function Invoke-Checked {
     param([string]$FilePath, [string[]]$Arguments)
@@ -118,78 +68,98 @@ $anyTool = Join-Path $anyDirectory $exeName
 if (-not $aotTool) { throw "No $exeName for $Rid was found under '$aotDirectory'." }
 if (-not (Test-Path $anyTool)) { throw "No $exeName was installed into '$anyDirectory'." }
 
+# The runtime the package bundles (written at build time next to the bundled host); its major is also the minimum the machine host needs.
+$bundledFile = Get-ChildItem $aotDirectory -Recurse -Force -File -Filter 'runtime-version.txt' | Select-Object -First 1
+if (-not $bundledFile) { throw "The $Rid package has no runtime-version.txt (no bundled runtime)." }
+$bundledMajor = ([version](Get-Content $bundledFile.FullName -Raw).Trim()).Major
+
 # --- Build the isolated machine ---------------------------------------------------------------------------------------------------------------
 $dotnetRoot = Join-Path $work 'dotnet'
 New-Item -ItemType Directory -Path $dotnetRoot | Out-Null
 
 $installScript = Join-Path $work $(if ($IsWindows) { 'dotnet-install.ps1' } else { 'dotnet-install.sh' })
-if ($plan.Install.Count -gt 0) {
+if (@($scenario.installs).Count -gt 0) {
     Invoke-WebRequest -Uri "https://dot.net/v1/$(Split-Path $installScript -Leaf)" -OutFile $installScript -MaximumRetryCount 3
 }
 
-foreach ($install in $plan.Install) {
-    Write-Host "::group::Installing .NET $($install.Channel)$(if ($install.ContainsKey('RuntimeOnly')) { ' (runtime only)' }) into the isolated root"
-    $runtimeOnly = $install.ContainsKey('RuntimeOnly')
-    try {
-        if ($IsWindows) {
-            # A hashtable so the arguments are bound by name (an array would be passed positionally).
-            $installArgs = @{ InstallDir = $dotnetRoot; Channel = $install.Channel; NoPath = $true }
-            if ($runtimeOnly) { $installArgs.Runtime = 'dotnet' }
-            & $installScript @installArgs
-        }
-        else {
-            $installArgs = @($installScript, '--install-dir', $dotnetRoot, '--channel', $install.Channel, '--no-path')
-            if ($runtimeOnly) { $installArgs += @('--runtime', 'dotnet') }
-            & bash @installArgs
-        }
-
-        if ($LASTEXITCODE -ne 0) { throw "dotnet-install exited with $LASTEXITCODE" }
+foreach ($install in @($scenario.installs)) {
+    $runtimeOnly = $install.PSObject.Properties.Name -contains 'runtimeOnly' -and $install.runtimeOnly
+    $channel = "$($install.major).0"
+    Write-Host "::group::Installing .NET $channel$(if ($runtimeOnly) { ' (runtime only)' }) into the isolated root"
+    if ($IsWindows) {
+        # A hashtable so the arguments are bound by name (an array would be passed positionally).
+        $installArgs = @{ InstallDir = $dotnetRoot; Channel = $channel; NoPath = $true }
+        if ($runtimeOnly) { $installArgs.Runtime = 'dotnet' }
+        & $installScript @installArgs
     }
-    catch {
-        if ($plan.ContainsKey('SkipWhenUnavailable')) {
-            Write-Host "::notice::Skipping scenario '$Scenario': .NET $($install.Channel) cannot be installed yet ($($_.Exception.Message))."
-            Write-Host '::endgroup::'
-            Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
-            return
-        }
-
-        throw
+    else {
+        $installArgs = @($installScript, '--install-dir', $dotnetRoot, '--channel', $channel, '--no-path')
+        if ($runtimeOnly) { $installArgs += @('--runtime', 'dotnet') }
+        & bash @installArgs
     }
 
+    if ($LASTEXITCODE -ne 0) { throw "dotnet-install of $channel exited with $LASTEXITCODE" }
     Write-Host '::endgroup::'
 }
 
-# dotnet-install falls back to the newest release in a channel even when it is only a preview/RC. A pre-release runtime is ignored by the
-# host's roll-forward (and a pre-release SDK is not selected by a plain pin), so the scenario is only meaningful once a stable one exists.
-if ($plan.ContainsKey('SkipWhenUnavailable')) {
-    $shared = Join-Path $dotnetRoot 'shared/Microsoft.NETCore.App'
-    $preview = @(Get-ChildItem $shared -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '-' })
-    if ($preview.Count -gt 0) {
-        Write-Host "::notice::Skipping scenario '$Scenario': only a pre-release is available ($($preview.Name -join ', ')); it runs once a stable release exists."
-        Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
-        return
-    }
-}
+# What the machine really has now. A channel installs its newest release even when that is only a preview.
+$runtimeNames = @(Get-ChildItem (Join-Path $dotnetRoot 'shared/Microsoft.NETCore.App') -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+$sdkNames = @(Get-ChildItem (Join-Path $dotnetRoot 'sdk') -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d' } | ForEach-Object { $_.Name })
+Write-Host "Isolated machine: runtimes [$($runtimeNames -join ', ')], SDKs [$($sdkNames -join ', ')]"
 
-$dotnetName = if ($IsWindows) { 'dotnet.exe' } else { 'dotnet' }
-if (Test-Path (Join-Path $dotnetRoot $dotnetName)) {
-    Write-Host "::group::Isolated machine"
-    & (Join-Path $dotnetRoot $dotnetName) --info | Select-String -Pattern 'Version:|Microsoft.NETCore.App' | ForEach-Object { Write-Host $_.Line }
-    Write-Host '::endgroup::'
-}
-else {
-    Write-Host 'Isolated machine: no dotnet installed.'
+# The runtime the machine host would run on, by .NET roll-forward: the highest release at or above the bundled major, and only when there is
+# none a pre-release one (11.0.0-rc.2). Null when nothing qualifies.
+$qualifying = @($runtimeNames | ForEach-Object { [pscustomobject]@{ Major = ([version](($_ -split '-')[0])).Major; Stable = $_ -notmatch '-' } } | Where-Object { $_.Major -ge $bundledMajor })
+$machineRuntime = $null
+foreach ($stable in $true, $false) {
+    $candidates = @($qualifying | Where-Object { $_.Stable -eq $stable })
+    if ($candidates.Count -gt 0) { $machineRuntime = [int]($candidates | Measure-Object Major -Maximum).Maximum; break }
 }
 
 # --- The repository the tool inventories ----------------------------------------------------------------------------------------------------
 $repo = Join-Path $work 'repo'
 Copy-Item -Recurse -Path $FixtureRoot -Destination $repo
 Get-ChildItem $repo -Recurse -Directory -Force | Where-Object { $_.Name -in 'bin', 'obj' } | Remove-Item -Recurse -Force
-if ($null -ne $plan.Pin) {
-    @{ sdk = $plan.Pin } | ConvertTo-Json | Set-Content -Path (Join-Path $repo 'global.json')
+
+$pinnedSdk = $null
+if ($null -ne $scenario.pinMajor) {
+    $pinnedSdk = $sdkNames | Where-Object { ([version](($_ -split '-')[0])).Major -eq $scenario.pinMajor } | Sort-Object { [version](($_ -split '-')[0]) } -Descending | Select-Object -First 1
+    if (-not $pinnedSdk) { throw "The scenario pins SDK $($scenario.pinMajor), but none was installed ([$($sdkNames -join ', ')])." }
+
+    # Exactly the installed SDK (a pre-release one included), as a repository that pins it would.
+    @{ sdk = [ordered]@{ version = $pinnedSdk; rollForward = 'disable'; allowPrerelease = $true } } | ConvertTo-Json | Set-Content -Path (Join-Path $repo 'global.json')
 }
 
-# --- Run every mode ----------------------------------------------------------------------------------------------------------------------------
+# --- Expected outcomes -------------------------------------------------------------------------------------------------------------------------
+# What happens once the host runs on runtime $Runtime (a major) and loads the pinned SDK's MSBuild; mirrors MsBuildEnvironment.TryRegister.
+function Get-HostOutcome([int]$Runtime) {
+    if (-not $pinnedSdk) { return 'MsBuildNotFound' }
+    $sdkMajor = ([version](($pinnedSdk -split '-')[0])).Major
+    if ($sdkMajor -lt $minimumSdk) { return 'MsBuildSdkUnsupported' }
+    if ($sdkMajor -gt $Runtime) { return 'MsBuildSdkNewerThanRuntime' }
+    return 'ok'
+}
+
+function Get-Expected([string]$Package, [string]$Mode) {
+    if ($Package -eq 'any') {
+        # The portable CLI is itself a framework-dependent program: without a machine runtime it does not start.
+        if ($null -eq $machineRuntime) { return 'cannot-run' }
+        if ($Mode -eq 'bundled') { return 'MsBuildHostFailed' }
+        return Get-HostOutcome $machineRuntime
+    }
+
+    switch ($Mode) {
+        'machine' { if ($null -eq $machineRuntime) { return 'MsBuildHostFailed' } else { return Get-HostOutcome $machineRuntime } }
+        'bundled' { return Get-HostOutcome $bundledMajor }
+        default {
+            # auto: the machine's runtime unless the bundled one is newer (or there is none), so the higher of the two.
+            $runtime = if ($null -eq $machineRuntime) { $bundledMajor } else { [Math]::Max($machineRuntime, $bundledMajor) }
+            return Get-HostOutcome $runtime
+        }
+    }
+}
+
+# --- Run every package and mode ---------------------------------------------------------------------------------------------------------------
 # The environment a machine with only these installs would have: dotnet from the isolated root and nothing else.
 $isolation = [ordered]@{
     PATH = $dotnetRoot
@@ -206,9 +176,9 @@ $isolation = [ordered]@{
 
 function Invoke-Mode([string]$Tool, [string]$Mode) {
     $saved = @{}
-    foreach ($name in $isolation.Keys) {
-        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
-        [Environment]::SetEnvironmentVariable($name, $isolation[$name])
+    foreach ($key in $isolation.Keys) {
+        $saved[$key] = [Environment]::GetEnvironmentVariable($key)
+        [Environment]::SetEnvironmentVariable($key, $isolation[$key])
     }
 
     try {
@@ -220,7 +190,7 @@ function Invoke-Mode([string]$Tool, [string]$Mode) {
         finally { Pop-Location }
     }
     finally {
-        foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+        foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key]) }
     }
 }
 
@@ -241,35 +211,37 @@ function Get-Outcome($Run) {
 $failures = @()
 $rows = @()
 $packages = @(
-    @{ Name = "aot ($Rid)"; Tool = $aotTool; Expected = $plan.Aot },
-    @{ Name = 'any'; Tool = $anyTool; Expected = $plan.Any }
+    @{ Name = "aot ($Rid)"; Id = 'aot'; Tool = $aotTool },
+    @{ Name = 'any'; Id = 'any'; Tool = $anyTool }
 )
 
 foreach ($package in $packages) {
-    for ($i = 0; $i -lt $modes.Count; $i++) {
-        $mode = $modes[$i]
-        $expected = $package.Expected[$i]
+    foreach ($mode in $modes) {
+        $expected = Get-Expected $package.Id $mode
         $run = Invoke-Mode $package.Tool $mode
         $actual = Get-Outcome $run
         $passed = if ($expected -in 'ok', 'cannot-run') { $actual.Outcome -eq $expected } else { $actual.Codes -contains $expected }
-        $rows += [pscustomobject]@{ Scenario = $Scenario; Package = $package.Name; Mode = $mode; Expected = $expected; Actual = $(if ($actual.Codes.Count) { $actual.Codes -join '+' } else { $actual.Outcome }); Result = $(if ($passed) { 'pass' } else { 'FAIL' }) }
+        $rows += [pscustomobject]@{ Scenario = $name; Package = $package.Name; Mode = $mode; Expected = $expected; Actual = $(if ($actual.Codes.Count) { $actual.Codes -join '+' } else { $actual.Outcome }); Result = $(if ($passed) { 'pass' } else { 'FAIL' }) }
         if (-not $passed) {
             $failures += "$($package.Name) --host-runtime ${mode}: expected '$expected' but got '$($actual.Outcome)' (exit $($run.ExitCode))`n$($run.Output.Substring(0, [Math]::Min(1500, $run.Output.Length)))"
         }
     }
 }
 
-$table = $rows | Format-Table -AutoSize | Out-String
-Write-Host $table
+Write-Host "Machine: host runtime major $(if ($null -ne $machineRuntime) { $machineRuntime } else { 'none' }); bundled runtime $bundledMajor; pinned SDK $(if ($pinnedSdk) { $pinnedSdk } else { 'none' }); minimum supported SDK $minimumSdk"
+Write-Host ($rows | Format-Table -AutoSize | Out-String)
 if ($env:GITHUB_STEP_SUMMARY) {
-    "### Host runtime scenario: ``$Scenario``" | Add-Content $env:GITHUB_STEP_SUMMARY
+    "### Host runtime scenario: ``$name``" | Add-Content $env:GITHUB_STEP_SUMMARY
+    "Machine host runtime $(if ($null -ne $machineRuntime) { $machineRuntime } else { 'none' }), bundled runtime $bundledMajor, pinned SDK $(if ($pinnedSdk) { $pinnedSdk } else { 'none' })" | Add-Content $env:GITHUB_STEP_SUMMARY
+    '' | Add-Content $env:GITHUB_STEP_SUMMARY
     '| Package | Mode | Expected | Actual | Result |' | Add-Content $env:GITHUB_STEP_SUMMARY
     '|---|---|---|---|---|' | Add-Content $env:GITHUB_STEP_SUMMARY
     foreach ($row in $rows) { "| $($row.Package) | $($row.Mode) | $($row.Expected) | $($row.Actual) | $($row.Result) |" | Add-Content $env:GITHUB_STEP_SUMMARY }
 }
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
-if ($failures.Count -gt 0) { throw "Scenario '$Scenario' did not behave as expected:`n$($failures -join "`n`n")" }
+if ($failures.Count -gt 0) { throw "Scenario '$name' did not behave as expected:`n$($failures -join "`n`n")" }
+
 # Native commands above (the any tool failing on purpose) leave a non-zero $LASTEXITCODE, which a CI step would report as its exit code.
 $global:LASTEXITCODE = 0
-Write-Host "Scenario '$Scenario': all $($rows.Count) combinations behaved as expected."
+Write-Host "Scenario '$name': all $($rows.Count) combinations behaved as expected."

@@ -8,6 +8,9 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+  # New .NET servicing releases, previews and stable releases arrive without any commit here; the host-runtime scenarios are planned from them.
+  schedule:
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -24,6 +27,8 @@ jobs:
   # https://docs.github.com/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/automatically-merging-a-pull-request
   automerge:
     runs-on: ubuntu-latest
+    # Only meaningful for dependency pull requests, not for the scheduled run.
+    if: github.event_name != 'schedule'
 
     permissions:
       pull-requests: write
@@ -183,23 +188,34 @@ jobs:
           name: packages-${{ matrix.rid }}
           path: ${{ env.PACKAGE_DIR }}
 
-  # What each --host-runtime does on a machine with exactly these .NET installs: every scenario installs only its own SDKs/runtimes into an
-  # isolated dotnet root and runs the Native AOT package and the portable `any` package in all three modes, comparing each result with the
-  # expected outcome (including the combinations that are not supported, which must fail with the right blocker). See
-  # .github/scripts/Invoke-HostRuntimeScenario.ps1 for the table. Windows and Linux only: they can install old SDKs side by side.
+  # What each --host-runtime does on a machine with exactly these .NET installs. The scenarios are not written down here: the plan job derives them
+  # from the bundled runtime's major (the MSBuild host's target framework), the oldest SDK we support (MsBuildEnvironment) and the .NET releases
+  # index, so they follow new previews, stable releases and a retarget on their own. See .github/scripts/New-HostRuntimeScenarioPlan.ps1.
+  host-runtime-plan:
+    name: host-runtime plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Plan the scenarios
+        id: plan
+        shell: pwsh
+        run: .\.github\scripts\New-HostRuntimeScenarioPlan.ps1
+
+  # One job per scenario (each installs a different set of .NET versions into its own isolated root, so they parallelize and fail on their own);
+  # inside a job the Native AOT and portable packages are run in all three modes against that one install. Windows and Linux x64 only: they can
+  # install old SDKs side by side. Expected outcomes are derived from what actually got installed; see Invoke-HostRuntimeScenario.ps1.
   host-runtime-scenarios:
-    name: host-runtime (${{ matrix.scenario }}, ${{ matrix.rid }})
-    needs: pack-and-smoke-test
+    name: host-runtime (${{ matrix.name }}, ${{ matrix.rid }})
+    needs: [pack-and-smoke-test, host-runtime-plan]
     runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        scenario: [sdk10, sdk9, sdk8, sdk6, sdk9-and-10, sdk10-and-11, sdk10-and-newest-11, runtime10-no-sdk, no-dotnet]
-        include:
-          - { os: ubuntu-latest, rid: linux-x64 }
-          - { os: windows-latest, rid: win-x64 }
+      matrix: ${{ fromJson(needs.host-runtime-plan.outputs.matrix) }}
 
     steps:
       - name: Checkout
@@ -219,4 +235,6 @@ jobs:
 
       - name: Run the scenario
         shell: pwsh
-        run: .\.github\scripts\Invoke-HostRuntimeScenario.ps1 -PackageDirectory "${{ runner.temp }}/packages" -Rid ${{ matrix.rid }} -Scenario ${{ matrix.scenario }}
+        env:
+          SCENARIO_SPEC: ${{ matrix.spec }}
+        run: .\.github\scripts\Invoke-HostRuntimeScenario.ps1 -PackageDirectory "${{ runner.temp }}/packages" -Rid ${{ matrix.rid }} -Spec $env:SCENARIO_SPEC

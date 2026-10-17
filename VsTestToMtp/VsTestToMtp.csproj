@@ -47,6 +47,8 @@
     (on its own OS); with it off, one pack would build every RID package as CoreCLR on this OS. The `any` fallback is not AOT.
     -->
     <PublishAot>true</PublishAot>
+    <!-- The portable (any) package is a framework-dependent program: run it on a newer installed major when .NET 10 itself is missing, as the MSBuild host does. -->
+    <RollForward>Major</RollForward>
     <PublishAot Condition="'$(RuntimeIdentifier)' == 'any'">false</PublishAot>
 
     <!--
@@ -87,8 +89,16 @@
   (the tests) get it in their output too. Publishing lays out its own copies; see PublishMsBuildHost.
   -->
   <Target Name="IncludeMsBuildHost" BeforeTargets="AssignTargetPaths" DependsOnTargets="ResolveProjectReferences">
+    <!-- Ask the host project where its output is (it honors an artifacts path, BaseOutputPath and so on) instead of assuming bin/<configuration>/<tfm>. -->
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\VsTestToMtp.MsBuildHost\VsTestToMtp.MsBuildHost.csproj" Targets="GetTargetPath"
+             RemoveProperties="PublishAot;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed">
+      <Output TaskParameter="TargetOutputs" ItemName="_MsBuildHostTargetPath" />
+    </MSBuild>
+    <PropertyGroup>
+      <_MsBuildHostOutputDirectory>@(_MsBuildHostTargetPath->'%(RootDir)%(Directory)')</_MsBuildHostOutputDirectory>
+    </PropertyGroup>
     <ItemGroup>
-      <_MsBuildHostFile Include="..\VsTestToMtp.MsBuildHost\bin\$(Configuration)\$(TargetFramework)\**\*" Exclude="**\*.pdb" />
+      <_MsBuildHostFile Include="$(_MsBuildHostOutputDirectory)**\*" Exclude="$(_MsBuildHostOutputDirectory)**\*.pdb" />
       <Content Include="@(_MsBuildHostFile)" Link="msbuild-host\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" Pack="false" />
     </ItemGroup>
   </Target>
@@ -101,8 +111,9 @@
   <Target Name="PublishMsBuildHost" BeforeTargets="ComputeResolvedFilesToPublishList">
     <PropertyGroup>
       <_HostProject>$(MSBuildThisFileDirectory)..\VsTestToMtp.MsBuildHost\VsTestToMtp.MsBuildHost.csproj</_HostProject>
-      <_HostFxDir>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)msbuild-host\</_HostFxDir>
-      <_HostBundledDir>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)msbuild-host-bundled\</_HostBundledDir>
+      <!-- IntermediateOutputPath is relative by default but absolute with an artifacts path; NormalizeDirectory lets a rooted segment win. -->
+      <_HostFxDir>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'msbuild-host'))</_HostFxDir>
+      <_HostBundledDir>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'msbuild-host-bundled'))</_HostBundledDir>
       <_HostBundled Condition="'$(PublishAot)' == 'true' and '$(RuntimeIdentifier)' != ''">true</_HostBundled>
     </PropertyGroup>
 

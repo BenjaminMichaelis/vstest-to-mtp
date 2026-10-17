@@ -112,14 +112,15 @@ internal static class MsBuildHostLauncher
             return [HostKind.Bundled];
         }
 
-        Version? machine = MachineRuntimeVersion();
         Version? bundled = BundledRuntimeVersion(bundledDirectory);
+        Version? machine = MachineRuntimeVersion(bundled?.Major ?? 0);
         bool preferBundled = machine is null || (bundled is not null && bundled > machine);
         return preferBundled ? [HostKind.Bundled, HostKind.Machine] : [HostKind.Machine, HostKind.Bundled];
     }
 
-    // The newest Microsoft.NETCore.App the machine's `dotnet` reports; null when `dotnet` is missing or does not answer.
-    private static Version? MachineRuntimeVersion()
+    // The runtime the machine host would roll forward to: the newest Microsoft.NETCore.App at or above $minMajor that `dotnet` reports, null when
+    // `dotnet` is missing, does not answer or has none. Mirrors .NET roll-forward: a pre-release runtime is only considered when no release fits.
+    private static Version? MachineRuntimeVersion(int minMajor)
     {
         ProcessStartInfo start = new(DotNetHostPath(), "--list-runtimes")
         {
@@ -139,7 +140,7 @@ internal static class MsBuildHostLauncher
                 return null;
             }
 
-            return ParseNewestRuntime(output.GetAwaiter().GetResult());
+            return ParseNewestRuntime(output.GetAwaiter().GetResult(), minMajor);
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)
         {
@@ -148,21 +149,30 @@ internal static class MsBuildHostLauncher
     }
 
     // Lines look like: Microsoft.NETCore.App 10.0.13 [path to the shared runtime folder]
-    // Pre-release runtimes are skipped: the host's roll-forward ignores them too, so they are never what it would run on.
-    private static Version? ParseNewestRuntime(string listRuntimes)
+    // A pre-release runtime (11.0.0-rc.2) counts only when no release version qualifies, as in the host's own roll-forward.
+    private static Version? ParseNewestRuntime(string listRuntimes, int minMajor)
     {
-        Version? newest = null;
+        Version? newestRelease = null;
+        Version? newestPreRelease = null;
         foreach (string line in listRuntimes.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length >= 2 && parts[0] == "Microsoft.NETCore.App"
-                && !parts[1].Contains('-') && Version.TryParse(parts[1], out Version? version) && (newest is null || version > newest))
+            if (parts.Length < 2 || parts[0] != "Microsoft.NETCore.App" || !Version.TryParse(parts[1].Split('-')[0], out Version? version) || version.Major < minMajor)
             {
-                newest = version;
+                continue;
+            }
+
+            if (parts[1].Contains('-'))
+            {
+                newestPreRelease = newestPreRelease is null || version > newestPreRelease ? version : newestPreRelease;
+            }
+            else
+            {
+                newestRelease = newestRelease is null || version > newestRelease ? version : newestRelease;
             }
         }
 
-        return newest;
+        return newestRelease ?? newestPreRelease;
     }
 
     // Written next to the bundled host when the package is built (the runtime pack version the self-contained publish used).
