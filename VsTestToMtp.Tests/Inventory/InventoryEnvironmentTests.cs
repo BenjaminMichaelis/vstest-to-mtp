@@ -49,7 +49,7 @@ public class InventoryEnvironmentTests
         }
 
         using ScenarioWorkspace pinnedElsewhere = new ScenarioWorkspace()
-            .Write("global.json", Pin(other.Version))
+            .Write("global.json", Pin(other))
             .WriteProject("App/App.csproj");
         ProjectInventory evaluatedElsewhere = pinnedElsewhere.Inventory("App/App.csproj").Projects.Single();
 
@@ -69,7 +69,7 @@ public class InventoryEnvironmentTests
         }
 
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("global.json", Pin(newer.Version))
+            .Write("global.json", Pin(newer))
             .WriteProject("App/App.csproj");
 
         // The host normally rolls forward to a newer installed runtime (which makes such an SDK usable); pin it to this runtime's
@@ -99,7 +99,9 @@ public class InventoryEnvironmentTests
 
     private const int MinimumSdkMajorVersion = 8;
 
-    private static string Pin(Version sdk) => $$"""{ "sdk": { "version": "{{sdk}}", "rollForward": "disable" } }""";
+    // The exact installed SDK, named by its folder so a pre-release SDK (whose System.Version drops the suffix) can be pinned too.
+    private static string Pin(VisualStudioInstance sdk) =>
+        $$"""{ "sdk": { "version": "{{Path.GetFileName(sdk.MSBuildPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))}}", "rollForward": "disable", "allowPrerelease": true } }""";
 
     // Same rule MSBuildLocator applies by default: an SDK's MSBuild needs at least the runtime it shipped with.
     private static bool IsNewerThanRuntime(Version sdk) =>
