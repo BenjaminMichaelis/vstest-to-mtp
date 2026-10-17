@@ -85,30 +85,17 @@ if ($fixtureRoots.Count -ne $ExpectedFixtureCount) {
 }
 
 function Invoke-Inventory {
-    param([string]$FixtureRoot, [hashtable]$Environment = @{})
+    param([string]$FixtureRoot, [string]$HostRuntime)
 
-    $previous = @{}
-    foreach ($name in $Environment.Keys) {
-        $previous[$name] = [Environment]::GetEnvironmentVariable($name)
-        [Environment]::SetEnvironmentVariable($name, $Environment[$name])
-    }
-
+    # Run from inside the fixture so its global.json selects the SDK, as a user would.
+    Push-Location $FixtureRoot
     try {
-        # Run from inside the fixture so its global.json selects the SDK, as a user would.
-        Push-Location $FixtureRoot
-        try {
-            $output = & $tool inventory (Join-Path $FixtureRoot 'Fixture.slnx') --root $FixtureRoot 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "inventory failed for '$FixtureRoot' with exit code $LASTEXITCODE`n$output" }
-            return ($output -join "`n")
-        }
-        finally {
-            Pop-Location
-        }
+        $output = & $tool inventory (Join-Path $FixtureRoot 'Fixture.slnx') --root $FixtureRoot --host-runtime $HostRuntime 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "inventory ($HostRuntime) failed for '$FixtureRoot' with exit code $LASTEXITCODE`n$output" }
+        return ($output -join "`n")
     }
     finally {
-        foreach ($name in $previous.Keys) {
-            [Environment]::SetEnvironmentVariable($name, $previous[$name])
-        }
+        Pop-Location
     }
 }
 
@@ -126,21 +113,29 @@ function Assert-Inventory {
     if (@($tests[0].runners) -notcontains 'VSTest') { throw "'$FixtureRoot' test project is not detected as running on VSTest." }
 }
 
+# Every package: the default (auto) and the machine runtime. The AOT packages also ship a bundled runtime, which must give the same answer.
+$runtimes = if ($isAot) { @('auto', 'machine', 'bundled') } else { @('auto', 'machine') }
+
 foreach ($root in $fixtureRoots) {
     Write-Host "::group::Inventory $root"
-    $json = Invoke-Inventory -FixtureRoot $root
-    Assert-Inventory -Json $json -FixtureRoot $root
+    $baseline = $null
+    foreach ($runtime in $runtimes) {
+        $json = Invoke-Inventory -FixtureRoot $root -HostRuntime $runtime
+        Assert-Inventory -Json $json -FixtureRoot $root
+        if ($null -eq $baseline) { $baseline = $json }
+        elseif ($json -ne $baseline) { throw "'$root': --host-runtime $runtime produced a different inventory than --host-runtime $($runtimes[0])." }
+    }
 
-    if ($isAot) {
-        # The host normally runs on the machine's .NET runtime. Make `dotnet` unusable as a host launcher so the AOT package has to
-        # fall back to its bundled, self-contained host, and require the same answer.
-        $fallbackJson = Invoke-Inventory -FixtureRoot $root -Environment @{ DOTNET_HOST_PATH = Join-Path $toolPath 'no-such-dotnet' }
-        Assert-Inventory -Json $fallbackJson -FixtureRoot $root
-        if ($fallbackJson -ne $json) { throw "'$root': the bundled MSBuild host produced a different inventory than the machine-runtime host." }
+    if (-not $isAot) {
+        # The portable package ships no bundled runtime: asking for it must be reported, not silently served by the machine runtime.
+        $result = Invoke-Inventory -FixtureRoot $root -HostRuntime 'bundled' | ConvertFrom-Json
+        if (@($result.blockers | Where-Object { $_.code -eq 'MsBuildHostFailed' }).Count -eq 0) {
+            throw "'$root': --host-runtime bundled on the any package did not report MsBuildHostFailed."
+        }
     }
 
     Write-Host '::endgroup::'
 }
 
-Write-Host "Smoke-tested the $Rid package over $($fixtureRoots.Count) fixtures$(if ($isAot) { ' (machine-runtime host and bundled host)' })."
+Write-Host "Smoke-tested the $Rid package over $($fixtureRoots.Count) fixtures (--host-runtime $($runtimes -join ', '))."
 Remove-Item -Recurse -Force $toolPath -ErrorAction SilentlyContinue

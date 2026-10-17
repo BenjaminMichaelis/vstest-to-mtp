@@ -118,6 +118,16 @@
              Properties="Configuration=$(Configuration);SelfContained=true;RuntimeIdentifier=$(RuntimeIdentifier);PublishDir=$(_HostBundledDir)"
              RemoveProperties="PublishAot;PublishSingleFile;PublishTrimmed;OutDir;OutputPath;NoBuild" />
 
+    <!--
+    Record which runtime the bundled host carries, so the launcher can compare it with the machine's (the runtime pack version is in the
+    host's deps.json, e.g. runtimepack.Microsoft.NETCore.App.Runtime.win-x64/10.0.13).
+    -->
+    <PropertyGroup Condition="'$(_HostBundled)' == 'true'">
+      <_BundledRuntimeVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(_HostBundledDir)vstest-to-mtp-msbuild-host.deps.json')), 'runtimepack\.Microsoft\.NETCore\.App\.Runtime\.[^/"]+/([0-9][0-9.]*)').Groups[1].Value)</_BundledRuntimeVersion>
+    </PropertyGroup>
+    <Error Condition="'$(_HostBundled)' == 'true' and '$(_BundledRuntimeVersion)' == ''" Text="Could not read the bundled runtime version from the MSBuild host's deps.json." />
+    <WriteLinesToFile Condition="'$(_HostBundled)' == 'true'" File="$(_HostBundledDir)runtime-version.txt" Lines="$(_BundledRuntimeVersion)" Overwrite="true" />
+
     <ItemGroup>
       <_HostFxFile Include="$(_HostFxDir)**" Exclude="$(_HostFxDir)**\*.pdb" />
       <ResolvedFileToPublish Include="@(_HostFxFile)" RelativePath="msbuild-host\%(RecursiveDir)%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" />

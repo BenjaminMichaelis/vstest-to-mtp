@@ -42,6 +42,14 @@ public static class Tool
     public static int Run(string[] args, InvocationConfiguration? configuration = null) =>
         CreateRootCommand().Parse(args).Invoke(configuration);
 
+    // A string option rather than an enum one: the parser restricts the values, and it stays trim-safe under Native AOT.
+    private static MsBuildHostRuntime ParseHostRuntime(string value) => value switch
+    {
+        "machine" => MsBuildHostRuntime.Machine,
+        "bundled" => MsBuildHostRuntime.Bundled,
+        _ => MsBuildHostRuntime.Auto,
+    };
+
     private static Command CreateInventoryCommand()
     {
         Argument<string> path = new("path")
@@ -53,17 +61,27 @@ public static class Tool
             Description = "Directory the output's relative paths are anchored to. Defaults to the nearest ancestor containing .git.",
         };
 
+        Option<string> hostRuntime = new("--host-runtime")
+        {
+            Description = "Which .NET runtime evaluates the projects: auto (the machine's runtime unless the bundled one is newer), machine, or bundled.",
+            DefaultValueFactory = _ => "auto",
+        };
+        hostRuntime.AcceptOnlyFromAmong("auto", "machine", "bundled");
+
         Command inventory = new("inventory", "Prints a read-only JSON inventory of the selected projects: MSBuild-evaluated state, test project classification and blockers.")
         {
             path,
             root,
+            hostRuntime,
         };
 
         inventory.SetAction(parseResult =>
         {
             InventoryResult result = InventoryBuilder.Build(
                 parseResult.GetRequiredValue(path),
-                new InventoryOptions(RootPath: parseResult.GetValue(root)));
+                new InventoryOptions(
+                    RootPath: parseResult.GetValue(root),
+                    HostRuntime: ParseHostRuntime(parseResult.GetRequiredValue(hostRuntime))));
 
             parseResult.InvocationConfiguration.Output.WriteLine(
                 JsonSerializer.Serialize(result, InventoryOutputJsonContext.Default.InventoryResult));

@@ -63,6 +63,31 @@ public class ToolTests
     }
 
     [Test]
+    [Arguments("auto")]
+    [Arguments("machine")]
+    public async Task Run_InventoryWithAHostRuntime_Succeeds(string hostRuntime)
+    {
+        // The test output ships only the machine-runtime host, so 'bundled' is covered by the launcher tests and the packed-tool smoke test.
+        string solution = Path.Combine(FixtureCatalog.All[0].RootPath, "Fixture.slnx");
+
+        (int exitCode, string output, string error) = Invoke("inventory", solution, "--host-runtime", hostRuntime);
+
+        await Assert.That(error).IsEmpty();
+        await Assert.That(exitCode).IsEqualTo(0);
+        using JsonDocument json = JsonDocument.Parse(output);
+        await Assert.That(json.RootElement.GetProperty("blockers").GetArrayLength()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Run_InventoryWithAnUnknownHostRuntime_Fails()
+    {
+        (int exitCode, _, string error) = Invoke("inventory", "somewhere", "--host-runtime", "fastest");
+
+        await Assert.That(exitCode).IsNotEqualTo(0);
+        await Assert.That(error).Contains("fastest");
+    }
+
+    [Test]
     public async Task Run_InventoryWithoutAPath_Fails()
     {
         (int exitCode, _, string error) = Invoke("inventory");

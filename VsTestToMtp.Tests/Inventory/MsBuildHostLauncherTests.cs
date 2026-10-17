@@ -65,6 +65,77 @@ public class MsBuildHostLauncherTests
     }
 
     [Test]
+    public async Task Auto_UsesTheMachineRuntime_WhenItIsNotOlderThanTheBundledOne()
+    {
+        // The bundled copy would crash if it were started, so success shows the machine's copy was chosen.
+        using HostLayout layout = HostLayout.Create(frameworkHost: HostBehavior.Working, bundledHost: HostBehavior.CrashesOnStart, bundledRuntimeVersion: "1.0.0");
+
+        InventoryResult result = layout.Inventory();
+
+        await Assert.That(result.Blockers).IsEmpty();
+        await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.Production);
+    }
+
+    [Test]
+    public async Task Auto_UsesTheBundledRuntime_WhenItIsNewerThanTheMachineOne()
+    {
+        // The machine's copy would crash if it were started, so success shows the bundled copy was chosen.
+        using HostLayout layout = HostLayout.Create(frameworkHost: HostBehavior.CrashesOnStart, bundledHost: HostBehavior.Working, bundledRuntimeVersion: "99.0.0");
+
+        InventoryResult result = layout.Inventory();
+
+        await Assert.That(result.Blockers).IsEmpty();
+        await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.Production);
+    }
+
+    [Test]
+    public async Task MachineRuntime_IsNeverReplacedByTheBundledHost()
+    {
+        // The machine's copy cannot start and the bundled one is newer and healthy; pinning the machine runtime must still not use it.
+        using HostLayout layout = HostLayout.Create(frameworkHost: HostBehavior.NeedsAnUninstalledRuntime, bundledHost: HostBehavior.Working, bundledRuntimeVersion: "99.0.0");
+
+        InventoryResult result = layout.Inventory(MsBuildHostRuntime.Machine);
+
+        await Assert.That(result.Projects.Single().Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
+        await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.Unknown);
+    }
+
+    [Test]
+    public async Task BundledRuntime_IsUsedEvenWhenTheMachineOneIsHealthy()
+    {
+        // The machine's copy would crash if it were started, and the bundled version is older than any machine runtime.
+        using HostLayout layout = HostLayout.Create(frameworkHost: HostBehavior.CrashesOnStart, bundledHost: HostBehavior.Working, bundledRuntimeVersion: "1.0.0");
+
+        InventoryResult result = layout.Inventory(MsBuildHostRuntime.Bundled);
+
+        await Assert.That(result.Blockers).IsEmpty();
+        await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.Production);
+    }
+
+    [Test]
+    public async Task BundledRuntime_WithoutABundledHost_IsReportedAsMsBuildHostFailed()
+    {
+        // The portable 'any' package ships only the machine-runtime host.
+        using HostLayout layout = HostLayout.Create(frameworkHost: HostBehavior.Working, bundledHost: null);
+
+        InventoryResult result = layout.Inventory(MsBuildHostRuntime.Bundled);
+
+        await Assert.That(result.Projects.Single().Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
+        await Assert.That(result.Projects.Single().Blockers.Single().Message).Contains("no bundled");
+    }
+
+    [Test]
+    public async Task MachineRuntime_WithoutABundledHost_Works()
+    {
+        using HostLayout layout = HostLayout.Create(frameworkHost: HostBehavior.Working, bundledHost: null);
+
+        InventoryResult result = layout.Inventory(MsBuildHostRuntime.Machine);
+
+        await Assert.That(result.Blockers).IsEmpty();
+        await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.Production);
+    }
+
+    [Test]
     public async Task BundledHostWithoutExecutePermission_IsMadeExecutable()
     {
         if (OperatingSystem.IsWindows())
@@ -106,10 +177,10 @@ public class MsBuildHostLauncherTests
         public string BundledDirectory => Path.Combine(Root, "msbuild-host-bundled");
 
         // Through the public API, with the host folders pointed at this layout instead of the tool's own directory.
-        public InventoryResult Inventory() =>
-            InventoryBuilder.Build(_workspace.PathOf("App/App.csproj"), new InventoryOptions(_workspace.RootPath, MsBuildHostDirectory: Root));
+        public InventoryResult Inventory(MsBuildHostRuntime runtime = MsBuildHostRuntime.Auto) =>
+            InventoryBuilder.Build(_workspace.PathOf("App/App.csproj"), new InventoryOptions(_workspace.RootPath, MsBuildHostDirectory: Root, HostRuntime: runtime));
 
-        public static HostLayout Create(HostBehavior? frameworkHost, HostBehavior? bundledHost)
+        public static HostLayout Create(HostBehavior? frameworkHost, HostBehavior? bundledHost, string? bundledRuntimeVersion = null)
         {
             ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject("App/App.csproj");
             string root = Path.Combine(workspace.RootPath, "layout");
@@ -122,6 +193,10 @@ public class MsBuildHostLauncherTests
             if (bundledHost is { } bundled)
             {
                 CopyHost(Path.Combine(root, "msbuild-host-bundled"), bundled);
+                if (bundledRuntimeVersion is not null)
+                {
+                    File.WriteAllText(Path.Combine(root, "msbuild-host-bundled", "runtime-version.txt"), bundledRuntimeVersion);
+                }
             }
 
             return new HostLayout(workspace, root);
