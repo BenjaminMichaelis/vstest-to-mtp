@@ -21,10 +21,10 @@ public class MsBuildHostLauncherTests
         using HostLayout layout = HostLayout.Create(frameworkHost: HostBehavior.Working, bundledHost: HostBehavior.Working);
         using EnvironmentVariableScope noDotNet = new("DOTNET_HOST_PATH", Path.Combine(layout.Root, "no-such-dotnet"));
 
-        HostResponse response = MsBuildHostLauncher.Run(layout.Request, layout.Root);
+        InventoryResult result = layout.Inventory();
 
-        await Assert.That(response.Blockers).IsEmpty();
-        await Assert.That(response.Projects.Single().Classification).IsEqualTo(ProjectClassification.Production);
+        await Assert.That(result.Blockers).IsEmpty();
+        await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.Production);
     }
 
     [Test]
@@ -33,10 +33,10 @@ public class MsBuildHostLauncherTests
         // hostfxr exits with FrameworkMissingFailure when no installed runtime satisfies the host's runtimeconfig.
         using HostLayout layout = HostLayout.Create(frameworkHost: HostBehavior.NeedsAnUninstalledRuntime, bundledHost: HostBehavior.Working);
 
-        HostResponse response = MsBuildHostLauncher.Run(layout.Request, layout.Root);
+        InventoryResult result = layout.Inventory();
 
-        await Assert.That(response.Blockers).IsEmpty();
-        await Assert.That(response.Projects.Single().Classification).IsEqualTo(ProjectClassification.Production);
+        await Assert.That(result.Blockers).IsEmpty();
+        await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.Production);
     }
 
     [Test]
@@ -45,10 +45,11 @@ public class MsBuildHostLauncherTests
         // The framework-dependent host starts but crashes; running the bundled host would hide that and could mask a real defect.
         using HostLayout layout = HostLayout.Create(frameworkHost: HostBehavior.CrashesOnStart, bundledHost: HostBehavior.Working);
 
-        HostResponse response = MsBuildHostLauncher.Run(layout.Request, layout.Root);
+        InventoryResult result = layout.Inventory();
 
-        await Assert.That(response.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
-        await Assert.That(response.Projects.Single().Classification).IsEqualTo(ProjectClassification.Unknown);
+        await Assert.That(result.Blockers.Select(b => b.Code)).Contains(BlockerCode.MsBuildHostFailed);
+        await Assert.That(result.Projects.Single().Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
+        await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.Unknown);
     }
 
     [Test]
@@ -57,9 +58,10 @@ public class MsBuildHostLauncherTests
         using HostLayout layout = HostLayout.Create(frameworkHost: HostBehavior.Working, bundledHost: null);
         using EnvironmentVariableScope noDotNet = new("DOTNET_HOST_PATH", Path.Combine(layout.Root, "no-such-dotnet"));
 
-        HostResponse response = MsBuildHostLauncher.Run(layout.Request, layout.Root);
+        InventoryResult result = layout.Inventory();
 
-        await Assert.That(response.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
+        await Assert.That(result.Blockers.Select(b => b.Code)).Contains(BlockerCode.MsBuildHostFailed);
+        await Assert.That(result.Projects.Single().Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
     }
 
     [Test]
@@ -77,9 +79,9 @@ public class MsBuildHostLauncherTests
         // What package extraction leaves behind: a regular file without the execute bits.
         File.SetUnixFileMode(apphost, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
 
-        HostResponse response = MsBuildHostLauncher.Run(layout.Request, layout.Root);
+        InventoryResult result = layout.Inventory();
 
-        await Assert.That(response.Blockers).IsEmpty();
+        await Assert.That(result.Blockers).IsEmpty();
     }
 
     public enum HostBehavior
@@ -93,18 +95,19 @@ public class MsBuildHostLauncherTests
     {
         private readonly ScenarioWorkspace _workspace;
 
-        private HostLayout(ScenarioWorkspace workspace, string root, HostRequest request)
+        private HostLayout(ScenarioWorkspace workspace, string root)
         {
             _workspace = workspace;
             Root = root;
-            Request = request;
         }
 
         public string Root { get; }
 
         public string BundledDirectory => Path.Combine(Root, "msbuild-host-bundled");
 
-        public HostRequest Request { get; }
+        // Through the public API, with the host folders pointed at this layout instead of the tool's own directory.
+        public InventoryResult Inventory() =>
+            InventoryBuilder.Build(_workspace.PathOf("App/App.csproj"), new InventoryOptions(_workspace.RootPath, MsBuildHostDirectory: Root));
 
         public static HostLayout Create(HostBehavior? frameworkHost, HostBehavior? bundledHost)
         {
@@ -121,8 +124,7 @@ public class MsBuildHostLauncherTests
                 CopyHost(Path.Combine(root, "msbuild-host-bundled"), bundled);
             }
 
-            HostRequest request = new(workspace.RootPath, workspace.RootPath, [workspace.PathOf("App/App.csproj")], null);
-            return new HostLayout(workspace, root, request);
+            return new HostLayout(workspace, root);
         }
 
         private static void CopyHost(string destination, HostBehavior behavior)

@@ -53,7 +53,8 @@ public static class InventoryBuilder
         List<InventoryBlocker> blockers)
     {
         HostResponse response = MsBuildHostLauncher.Run(
-            new HostRequest(selectionDirectory, formatter.Root, selection.ProjectPaths, options?.SdkPackagesDirectory));
+            new HostRequest(selectionDirectory, formatter.Root, selection.ProjectPaths, options?.SdkPackagesDirectory),
+            options?.MsBuildHostDirectory);
         blockers.AddRange(response.Blockers);
         return [.. response.Projects];
     }
