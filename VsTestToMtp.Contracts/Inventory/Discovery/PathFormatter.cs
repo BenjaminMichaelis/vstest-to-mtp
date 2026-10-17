@@ -4,7 +4,7 @@ namespace VsTestToMtp.Inventory;
 /// Formats absolute paths relative to the inventory root with <c>/</c> separators so results are stable across machines.
 /// Paths outside the root stay absolute.
 /// </summary>
-internal sealed class PathFormatter(string root)
+public sealed class PathFormatter(string root)
 {
     public string Root { get; } = Path.GetFullPath(root);
 

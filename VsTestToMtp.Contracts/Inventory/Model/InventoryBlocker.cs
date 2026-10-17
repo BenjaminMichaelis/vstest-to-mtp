@@ -16,14 +16,14 @@ public sealed record InventoryBlocker(
     public IReadOnlyList<SourceLocation> RelatedLocations { get; init; } = [];
 
     /// <summary>An error blocker: state cannot be determined, or restore/evaluation would fail. Prefer these over the constructor.</summary>
-    internal static InventoryBlocker Error(BlockerCode code, string message, string remediation, string? project = null, SourceLocation? location = null) =>
+    public static InventoryBlocker Error(BlockerCode code, string message, string remediation, string? project = null, SourceLocation? location = null) =>
         new(code, BlockerSeverity.Error, message, remediation, project, location);
 
     /// <summary>A warning blocker: the result may be wrong or environment-dependent.</summary>
-    internal static InventoryBlocker Warning(BlockerCode code, string message, string remediation, string? project = null, SourceLocation? location = null) =>
+    public static InventoryBlocker Warning(BlockerCode code, string message, string remediation, string? project = null, SourceLocation? location = null) =>
         new(code, BlockerSeverity.Warning, message, remediation, project, location);
 
     /// <summary>An informational blocker: nothing prevents migration.</summary>
-    internal static InventoryBlocker Info(BlockerCode code, string message, string remediation, string? project = null, SourceLocation? location = null) =>
+    public static InventoryBlocker Info(BlockerCode code, string message, string remediation, string? project = null, SourceLocation? location = null) =>
         new(code, BlockerSeverity.Info, message, remediation, project, location);
 }
