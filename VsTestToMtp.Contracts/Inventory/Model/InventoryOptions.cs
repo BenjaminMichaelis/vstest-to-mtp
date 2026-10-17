@@ -17,4 +17,12 @@ namespace VsTestToMtp.Inventory;
 /// projects with the .NET SDK's MSBuild. Defaults to the directory of the running tool, which is where the package installs them; set it
 /// when the library is hosted somewhere that lays the host out elsewhere.
 /// </param>
-public sealed record InventoryOptions(string? RootPath = null, string? SdkPackagesDirectory = null, string? MsBuildHostDirectory = null);
+/// <param name="HostRuntime">
+/// Which .NET runtime the MSBuild host runs on: <see cref="MsBuildHostRuntime.Auto"/> (the default) prefers the machine's runtime unless the
+/// bundled one is newer; the other values pin one runtime and never fall back to the other.
+/// </param>
+public sealed record InventoryOptions(
+    string? RootPath = null,
+    string? SdkPackagesDirectory = null,
+    string? MsBuildHostDirectory = null,
+    MsBuildHostRuntime HostRuntime = MsBuildHostRuntime.Auto);

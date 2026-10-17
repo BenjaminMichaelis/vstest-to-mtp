@@ -54,7 +54,8 @@ public static class InventoryBuilder
     {
         HostResponse response = MsBuildHostLauncher.Run(
             new HostRequest(selectionDirectory, formatter.Root, selection.ProjectPaths, options?.SdkPackagesDirectory),
-            options?.MsBuildHostDirectory);
+            options?.MsBuildHostDirectory,
+            options?.HostRuntime ?? MsBuildHostRuntime.Auto);
         blockers.AddRange(response.Blockers);
         return [.. response.Projects];
     }
