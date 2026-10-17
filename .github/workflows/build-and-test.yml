@@ -174,3 +174,49 @@ jobs:
             Write-Host $changes
             throw 'The smoke test modified the committed fixtures.'
           }
+
+      # The scenario jobs below reuse these packages instead of packing again.
+      - name: Upload packages
+        if: matrix.rid == 'win-x64' || matrix.rid == 'linux-x64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages-${{ matrix.rid }}
+          path: ${{ env.PACKAGE_DIR }}
+
+  # What each --host-runtime does on a machine with exactly these .NET installs: every scenario installs only its own SDKs/runtimes into an
+  # isolated dotnet root and runs the Native AOT package and the portable `any` package in all three modes, comparing each result with the
+  # expected outcome (including the combinations that are not supported, which must fail with the right blocker). See
+  # .github/scripts/Invoke-HostRuntimeScenario.ps1 for the table. Windows and Linux only: they can install old SDKs side by side.
+  host-runtime-scenarios:
+    name: host-runtime (${{ matrix.scenario }}, ${{ matrix.rid }})
+    needs: pack-and-smoke-test
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        scenario: [sdk10, sdk9, sdk8, sdk6, sdk9-and-10, sdk10-and-11, sdk10-and-newest-11, runtime10-no-sdk, no-dotnet]
+        include:
+          - { os: ubuntu-latest, rid: linux-x64 }
+          - { os: windows-latest, rid: win-x64 }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Only used to run `dotnet tool install`; the scenario runs with an isolated dotnet root of its own.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: "./global.json"
+
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          name: packages-${{ matrix.rid }}
+          path: ${{ runner.temp }}/packages
+
+      - name: Run the scenario
+        shell: pwsh
+        run: .\.github\scripts\Invoke-HostRuntimeScenario.ps1 -PackageDirectory "${{ runner.temp }}/packages" -Rid ${{ matrix.rid }} -Scenario ${{ matrix.scenario }}
