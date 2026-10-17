@@ -5,6 +5,7 @@ internal sealed record EvaluatedProject(
     string Path,
     IReadOnlyList<EvaluatedTargetFramework> TargetFrameworks,
     IReadOnlyList<ImportRecord> Imports,
+    IReadOnlyList<SdkReferenceState> Sdks,
     IReadOnlyList<InventoryBlocker> Blockers)
 {
     // Errors that mean MSBuild's picture of the project is incomplete. Other errors (for example a declaration NuGet would reject)

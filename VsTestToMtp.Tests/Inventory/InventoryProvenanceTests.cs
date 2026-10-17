@@ -1,7 +1,5 @@
 namespace VsTestToMtp.Tests.Inventory;
 
-using System.IO.Compression;
-
 using TUnit.Assertions.Enums;
 
 using VsTestToMtp.Inventory;
@@ -115,7 +113,7 @@ public class InventoryProvenanceTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .Write("NuGet.config", LocalFeedNuGetConfig)
             .WriteProject("App/App.csproj", """  <Sdk Name="Local.Test.Sdk" Version="1.0.0" />""");
-        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", SdkProps);
+        ScenarioWorkspace.WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", SdkProps);
 
         try
         {
@@ -153,7 +151,7 @@ public class InventoryProvenanceTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .Write("NuGet.config", LocalFeedNuGetConfig)
             .WriteProject("App/App.csproj", """  <Sdk Name="Local.Test.Sdk" Version="1.0.0" />""");
-        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", SdkProps);
+        ScenarioWorkspace.WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", SdkProps);
         string before = Fixtures.FixtureWorkspace.ComputeHash(workspace.RootPath);
 
         try
@@ -271,7 +269,7 @@ public class InventoryProvenanceTests
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .Write("NuGet.config", LocalFeedNuGetConfig)
             .WriteProject("App/App.csproj", """  <Sdk Name="Local.Test.Sdk" Version="1.0.0" />""");
-        WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", "<Project>\n  <Import Project=\"does-not-exist.props\" />\n</Project>");
+        ScenarioWorkspace.WriteSdkPackage(workspace.PathOf("feed"), "Local.Test.Sdk", "1.0.0", "<Project>\n  <Import Project=\"does-not-exist.props\" />\n</Project>");
 
         try
         {
@@ -295,34 +293,6 @@ public class InventoryProvenanceTests
     }
 
     /// <summary>Writes a minimal MSBuild SDK package (<c>Sdk/Sdk.props</c> and <c>Sdk/Sdk.targets</c>) to a local feed.</summary>
-    private static void WriteSdkPackage(string feed, string id, string version, string props)
-    {
-        Directory.CreateDirectory(feed);
-        using ZipArchive package = ZipFile.Open(Path.Combine(feed, $"{id.ToLowerInvariant()}.{version}.nupkg"), ZipArchiveMode.Create);
-        Add($"{id}.nuspec", $"""
-            <?xml version="1.0"?>
-            <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
-              <metadata>
-                <id>{id}</id>
-                <version>{version}</version>
-                <authors>tests</authors>
-                <description>Test SDK</description>
-                <packageTypes>
-                  <packageType name="MSBuildSdk" />
-                </packageTypes>
-              </metadata>
-            </package>
-            """);
-        Add("Sdk/Sdk.props", props);
-        Add("Sdk/Sdk.targets", "<Project />");
-
-        void Add(string entryName, string content)
-        {
-            using StreamWriter writer = new(package.CreateEntry(entryName).Open());
-            writer.Write(content);
-        }
-    }
-
     [Test]
     public async Task InlineVersion_SuppliedByAnUpdate_PointsAtTheUpdate()
     {

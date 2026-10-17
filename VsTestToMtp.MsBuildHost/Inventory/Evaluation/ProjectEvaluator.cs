@@ -13,20 +13,33 @@ namespace VsTestToMtp.Inventory;
 /// </summary>
 internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<string> selectedProjects) : IDisposable
 {
+    // Besides classification, the migration preflight reads the runtime target (TargetFrameworkIdentifier/Version), the SDK
+    // (NETCoreSdkVersion), MSTest.Sdk's state (UsingMSTestSdk, UseVSTest, MicrosoftTestingPlatformVersion, MSTestVersion) and
+    // custom entry points (StartupObject, GenerateProgramFile, GenerateTestingPlatformEntryPoint) from here.
     internal static readonly string[] RelevantProperties =
     [
         "CentralPackageVersionOverrideEnabled",
         "EnableMSTestRunner",
         "EnableNUnitRunner",
         "EnableTUnitRunner",
+        "GenerateProgramFile",
+        "GenerateTestingPlatformEntryPoint",
         "IsPackable",
         "IsTestProject",
         "ManagePackageVersionsCentrally",
+        "MicrosoftTestingPlatformVersion",
+        "MSTestVersion",
+        "NETCoreSdkVersion",
         "OutputType",
+        "StartupObject",
         "TargetFramework",
+        "TargetFrameworkIdentifier",
         "TargetFrameworks",
+        "TargetFrameworkVersion",
         "TestingPlatformDotnetTestSupport",
         "UseMicrosoftTestingPlatformRunner",
+        "UseVSTest",
+        "UsingMSTestSdk",
     ];
 
     private readonly ProjectBlockerDetector _blockerDetector = new(formatter);
@@ -85,7 +98,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
         Project? outer = Load(collection, projectPath, null, displayPath, blockers);
         if (outer is null)
         {
-            return new EvaluatedProject(Path: displayPath, TargetFrameworks: [], Imports: [], Blockers: BlockerOrdering.Normalize(blockers));
+            return new EvaluatedProject(Path: displayPath, TargetFrameworks: [], Imports: [], Sdks: [], Blockers: BlockerOrdering.Normalize(blockers));
         }
 
         // Every evaluation gets its own resolver: an import conditioned on $(TargetFramework) only exists in the inner build.
@@ -141,6 +154,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             Path: displayPath,
             TargetFrameworks: frameworks,
             Imports: CaptureImports(evaluated),
+            Sdks: CaptureSdks(evaluated),
             Blockers: BlockerOrdering.Normalize(blockers));
     }
 
@@ -350,6 +364,64 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
             .OrderBy(i => i.File, StringComparer.Ordinal)
             .ThenBy(i => i.ImportedBy.File, StringComparer.Ordinal)
             .ThenBy(i => i.ImportedBy.Line)];
+    }
+
+    /// <summary>
+    /// The SDKs repository files reference, with the version MSBuild resolved. An SDK's own nested SDK imports (MSTest.Sdk importing
+    /// Microsoft.NET.Sdk) are not the repository's to change, so they are left out. Each SDK contributes a top and a bottom import;
+    /// both point at the same reference, so it is reported once.
+    /// </summary>
+    private static List<SdkReferenceState> CaptureSdks(IEnumerable<(Project Project, ProvenanceResolver Resolver)> evaluated)
+    {
+        List<SdkReferenceState> sdks = [];
+        foreach ((Project project, ProvenanceResolver resolver) in evaluated)
+        {
+            foreach (ResolvedImport import in project.Imports)
+            {
+                if (import.ImportingElement is not { Sdk.Length: > 0 } element || !resolver.IsRepositoryFile(element.ContainingProject.FullPath))
+                {
+                    continue;
+                }
+
+                // An implicit import (Sdk="Name/1.2.3" or <Sdk Name="..." Version="..." />) carries the whole reference in its Sdk attribute
+                // and has no position of its own, so the position is the attribute or element it was made from.
+                string[] reference = element.Sdk.Split('/', 2, StringSplitOptions.TrimEntries);
+                string? declared = element.Version is { Length: > 0 } version ? version
+                    : reference.Length == 2 && reference[1].Length > 0 ? reference[1]
+                    : null;
+                if (declared?.StartsWith("min=", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    declared = declared["min=".Length..];
+                }
+
+                SdkReferenceState sdk = new(
+                    reference[0],
+                    DeclaredVersion: declared,
+                    ResolvedVersion: import.SdkResult is { Success: true, Version.Length: > 0 } result ? result.Version : null,
+                    element.Location.Line > 0 ? resolver.LocationOf(element) : SdkReferenceLocation(element.ContainingProject, reference[0], resolver));
+                if (!sdks.Contains(sdk))
+                {
+                    sdks.Add(sdk);
+                }
+            }
+        }
+
+        return [.. sdks
+            .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(s => s.Location.File, StringComparer.Ordinal)
+            .ThenBy(s => s.Location.Line)];
+    }
+
+    private static SourceLocation SdkReferenceLocation(ProjectRootElement root, string name, ProvenanceResolver resolver)
+    {
+        if (root.Children.OfType<ProjectSdkElement>().FirstOrDefault(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)) is { } sdkElement)
+        {
+            return resolver.LocationOf(sdkElement);
+        }
+
+        // The <Project Sdk="..."> attribute; MSBuild reports no position for it when the project has none (then the file itself).
+        ElementLocation attribute = root.SdkLocation;
+        return resolver.LocationOf(root.FullPath, attribute.Line, attribute.Column);
     }
 
     private static string[] SplitFrameworks(string value) =>

@@ -291,6 +291,7 @@ internal static class MsBuildHostLauncher
                     Runners: [],
                     TargetFrameworks: [],
                     Imports: [],
+                    Sdks: [],
                     Blockers: [blocker])),
             ]);
     }

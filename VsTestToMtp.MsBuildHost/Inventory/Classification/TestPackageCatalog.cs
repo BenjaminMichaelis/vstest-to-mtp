@@ -31,6 +31,9 @@ internal static class TestPackageCatalog
         ["MSTest.TestAdapter"] = new(TestPackageRole.Runner, TestFramework.MSTest, TestRunnerKind.VSTest),
         ["NUnit"] = new(TestPackageRole.Framework, TestFramework.NUnit, null),
         ["NUnit3TestAdapter"] = new(TestPackageRole.Runner, TestFramework.NUnit, TestRunnerKind.VSTest),
+
+        // The NUnit 2 adapter; the migration preflight blocks it (NUnit3TestAdapter, the only adapter with MTP support, does not run NUnit 2).
+        ["NUnitTestAdapter"] = new(TestPackageRole.Runner, TestFramework.NUnit, TestRunnerKind.VSTest),
         ["NUnit.Console"] = new(TestPackageRole.Runner, TestFramework.NUnit, null),
         ["xunit"] = new(TestPackageRole.Framework, TestFramework.XUnitV2, null),
         ["xunit.core"] = new(TestPackageRole.Framework, TestFramework.XUnitV2, null),
@@ -42,8 +45,14 @@ internal static class TestPackageCatalog
         ["xunit.v3.mtp-off"] = new(TestPackageRole.FrameworkAndRunner, TestFramework.XUnitV3, TestRunnerKind.VSTest),
         ["xunit.v3.mtp-v1"] = new(TestPackageRole.FrameworkAndRunner, TestFramework.XUnitV3, TestRunnerKind.MicrosoftTestingPlatform),
         ["xunit.v3.mtp-v2"] = new(TestPackageRole.FrameworkAndRunner, TestFramework.XUnitV3, TestRunnerKind.MicrosoftTestingPlatform),
+
+        // The same variants without the assertion library (https://xunit.net/docs/getting-started/v3/microsoft-testing-platform).
+        ["xunit.v3.core.mtp-off"] = new(TestPackageRole.FrameworkAndRunner, TestFramework.XUnitV3, TestRunnerKind.VSTest),
+        ["xunit.v3.core.mtp-v1"] = new(TestPackageRole.FrameworkAndRunner, TestFramework.XUnitV3, TestRunnerKind.MicrosoftTestingPlatform),
+        ["xunit.v3.core.mtp-v2"] = new(TestPackageRole.FrameworkAndRunner, TestFramework.XUnitV3, TestRunnerKind.MicrosoftTestingPlatform),
         ["TUnit"] = new(TestPackageRole.FrameworkAndRunner, TestFramework.TUnit, TestRunnerKind.MicrosoftTestingPlatform),
         ["TUnit.Core"] = new(TestPackageRole.Framework, TestFramework.TUnit, null),
+        ["TUnit.Engine"] = new(TestPackageRole.Runner, TestFramework.TUnit, TestRunnerKind.MicrosoftTestingPlatform),
         [TestSdkPackage] = new(TestPackageRole.Runner, null, TestRunnerKind.VSTest),
         ["Microsoft.Testing.Platform"] = new(TestPackageRole.Runner, null, TestRunnerKind.MicrosoftTestingPlatform),
         ["Microsoft.Testing.Platform.MSBuild"] = new(TestPackageRole.Runner, null, TestRunnerKind.MicrosoftTestingPlatform),
