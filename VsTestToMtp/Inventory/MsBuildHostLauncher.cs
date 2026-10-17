@@ -28,8 +28,8 @@ internal static class MsBuildHostLauncher
     private const int NotStarted = -1;
 
     /// <param name="request">What to evaluate.</param>
-    /// <param name="baseDirectory">Where the host folders are laid out; the CLI's own directory unless a test supplies one.</param>
-    public static HostResponse Run(HostRequest request, string? baseDirectory = null)
+    /// <param name="baseDirectory">Where the host folders are laid out; the running tool's own directory when not given.</param>
+    public static HostResponse Run(HostRequest request, string? baseDirectory)
     {
         baseDirectory ??= AppContext.BaseDirectory;
         string frameworkHost = Path.Combine(baseDirectory, FrameworkDirectory, HostName + ".dll");
