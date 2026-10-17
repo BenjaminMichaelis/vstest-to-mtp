@@ -31,9 +31,10 @@ public class InventoryEnvironmentTests
     }
 
     [Test]
-    public async Task SelectionPinnedToADifferentSdkThanTheLoadedOne_IsReportedAsMismatch()
+    public async Task SelectionPinnedToADifferentSdkThanAnEarlierOne_IsEvaluatedWithItsOwnSdk()
     {
-        // Every workspace pins the fixtures' SDK, so evaluating one first registers that SDK (or confirms it is already registered).
+        // Every evaluation runs in its own MSBuild host process, so unlike an in-process MSBuild (registered once per process)
+        // a later selection pinned to another SDK is evaluated with that SDK instead of being refused.
         using ScenarioWorkspace pinnedLikeTheFixtures = new ScenarioWorkspace().WriteProject("App/App.csproj");
         ProjectInventory evaluated = pinnedLikeTheFixtures.Inventory("App/App.csproj").Projects.Single();
         await Assert.That(evaluated.Blockers).IsEmpty();
@@ -48,14 +49,12 @@ public class InventoryEnvironmentTests
         }
 
         using ScenarioWorkspace pinnedElsewhere = new ScenarioWorkspace()
-            .Write("global.json", Pin(other.Version))
+            .Write("global.json", Pin(other))
             .WriteProject("App/App.csproj");
-        ProjectInventory refused = pinnedElsewhere.Inventory("App/App.csproj").Projects.Single();
+        ProjectInventory evaluatedElsewhere = pinnedElsewhere.Inventory("App/App.csproj").Projects.Single();
 
-        await Assert.That(refused.Classification).IsEqualTo(ProjectClassification.Unknown);
-        InventoryBlocker blocker = refused.Blockers.Single();
-        await Assert.That(blocker.Code).IsEqualTo(BlockerCode.MsBuildSdkMismatch);
-        await Assert.That(blocker.Severity).IsEqualTo(BlockerSeverity.Error);
+        await Assert.That(evaluatedElsewhere.Classification).IsEqualTo(ProjectClassification.Production);
+        await Assert.That(evaluatedElsewhere.Blockers).IsEmpty();
     }
 
     [Test]
@@ -70,18 +69,39 @@ public class InventoryEnvironmentTests
         }
 
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("global.json", Pin(newer.Version))
+            .Write("global.json", Pin(newer))
             .WriteProject("App/App.csproj");
 
+        // The host normally rolls forward to a newer installed runtime (which makes such an SDK usable); pin it to this runtime's
+        // major so the refusal is deterministic whatever else is installed. The roll-forward itself is covered by the host's
+        // RollForward setting, not by this test.
+        using EnvironmentVariableScope pinned = new("DOTNET_ROLL_FORWARD", "Minor");
         ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
 
         await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
         await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildSdkNewerThanRuntime]);
     }
 
+    [Test]
+    public async Task MsBuildHostThatCannotBeStarted_IsReportedAsMsBuildHostFailed()
+    {
+        // The test layout has no self-contained host to fall back to, so a machine without a usable `dotnet` has nowhere to run it.
+        using EnvironmentVariableScope noDotNet = new("DOTNET_HOST_PATH", Path.Combine(Path.GetTempPath(), "no-such-dotnet-" + Guid.NewGuid().ToString("N")));
+        using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject("App/App.csproj");
+
+        InventoryResult result = workspace.Inventory("App/App.csproj");
+
+        ProjectInventory project = result.Projects.Single();
+        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
+        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
+        await Assert.That(result.Blockers.Select(b => b.Code)).Contains(BlockerCode.MsBuildHostFailed);
+    }
+
     private const int MinimumSdkMajorVersion = 8;
 
-    private static string Pin(Version sdk) => $$"""{ "sdk": { "version": "{{sdk}}", "rollForward": "disable" } }""";
+    // The exact installed SDK, named by its folder so a pre-release SDK (whose System.Version drops the suffix) can be pinned too.
+    private static string Pin(VisualStudioInstance sdk) =>
+        $$"""{ "sdk": { "version": "{{Path.GetFileName(sdk.MSBuildPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))}}", "rollForward": "disable", "allowPrerelease": true } }""";
 
     // Same rule MSBuildLocator applies by default: an SDK's MSBuild needs at least the runtime it shipped with.
     private static bool IsNewerThanRuntime(Version sdk) =>

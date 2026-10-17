@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-
 namespace VsTestToMtp.Inventory;
 
 /// <summary>
@@ -11,9 +9,6 @@ namespace VsTestToMtp.Inventory;
 /// </summary>
 public static class InventoryBuilder
 {
-    // MSBuild's evaluation caches are process-wide; evaluating concurrently only adds contention (several times slower).
-    private static readonly Lock EvaluationLock = new();
-
     public static InventoryResult Build(string path, InventoryOptions? options = null)
     {
         string fullPath = Path.GetFullPath(path);
@@ -48,8 +43,8 @@ public static class InventoryBuilder
             BlockerOrdering.Normalize(all));
     }
 
-    // Kept separate and un-inlined: MSBuild must be registered before anything touching Microsoft.Build is JIT-compiled.
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    // MSBuild is evaluated in a separate host process (the CLI is Native AOT and cannot load it). Each run gets its own host, so
+    // MSBuild is registered once per process and different global.json selections never share one.
     private static List<ProjectInventory> EvaluateProjects(
         SolutionReader.Selection selection,
         string selectionDirectory,
@@ -57,44 +52,12 @@ public static class InventoryBuilder
         InventoryOptions? options,
         List<InventoryBlocker> blockers)
     {
-        if (MsBuildEnvironment.TryRegister(selectionDirectory) is { } blocker)
-        {
-            blockers.Add(blocker);
-            return
-            [
-                .. selection.ProjectPaths.Select(p => new ProjectInventory(
-                    Path: formatter.Format(p),
-                    Name: Path.GetFileNameWithoutExtension(p),
-                    Classification: ProjectClassification.Unknown,
-                    HasTestLibraryDependency: false,
-                    Frameworks: [],
-                    Runners: [],
-                    TargetFrameworks: [],
-                    Imports: [],
-                    Blockers: [blocker])),
-            ];
-        }
-
-        return EvaluateRegistered(selection, formatter, options);
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static List<ProjectInventory> EvaluateRegistered(SolutionReader.Selection selection, PathFormatter formatter, InventoryOptions? options)
-    {
-        HashSet<string> selected = new(selection.ProjectPaths, PathComparison.Comparer);
-
-        lock (EvaluationLock)
-        {
-            // Evaluation must not extract an SDK package into the repository; see NuGetPackagesScope (it only touches the
-            // environment when a NuGet.config could redirect the packages folder, or the caller asked for a directory).
-            using NuGetPackagesScope packages = NuGetPackagesScope.Redirect(options?.SdkPackagesDirectory, selection.ProjectPaths);
-            using ProjectEvaluator evaluator = new(formatter, selected);
-            return
-            [
-                .. selection.ProjectPaths.Select(p =>
-                    TestProjectClassifier.Classify(evaluator.Evaluate(p), Path.GetFileNameWithoutExtension(p))),
-            ];
-        }
+        HostResponse response = MsBuildHostLauncher.Run(
+            new HostRequest(selectionDirectory, formatter.Root, selection.ProjectPaths, options?.SdkPackagesDirectory),
+            options?.MsBuildHostDirectory,
+            options?.HostRuntime ?? MsBuildHostRuntime.Auto);
+        blockers.AddRange(response.Blockers);
+        return [.. response.Projects];
     }
 
     private static string? FindRepositoryRoot(string startDirectory)

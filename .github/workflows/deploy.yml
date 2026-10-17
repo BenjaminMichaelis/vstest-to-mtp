@@ -10,10 +10,25 @@ defaults:
     shell: pwsh
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
+  # One pack per platform: Native AOT compilation needs the build OS to match the target RID's OS. `any` is the portable
+  # CoreCLR fallback and `pointer` is the top-level package that points at the RID-specific ones.
+  # See: https://learn.microsoft.com/en-us/dotnet/core/tools/rid-specific-tools#package-your-tool
+  pack:
+    name: pack (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: windows-latest, rid: win-x64 }
+          - { os: windows-11-arm, rid: win-arm64 }
+          - { os: ubuntu-latest, rid: linux-x64 }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64 }
+          - { os: macos-latest, rid: osx-arm64 }
+          - { os: ubuntu-latest, rid: any }
+          - { os: ubuntu-latest, rid: pointer }
     steps:
       - uses: actions/checkout@v7
 
@@ -21,6 +36,11 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           global-json-file: "./global.json"
+
+      # Native AOT links with the platform toolchain.
+      - name: Install Native AOT prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
 
       - name: Restore dependencies
         run: dotnet restore
@@ -36,12 +56,9 @@ jobs:
       - name: Pack
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          # MODE 1 (default, CoreCLR self-contained): a single `dotnet pack` produces all packages.
-          # For MODE 2 (AOT) or MODE 3 (Hybrid AOT + CoreCLR), you must instead run
-          # `dotnet pack -r <RID>` per platform in a matrix job and collect the output.
-          # See the csproj packaging mode comments and:
-          # https://learn.microsoft.com/en-us/dotnet/core/tools/rid-specific-tools#package-your-tool
-          $packOutput = & dotnet pack -p:PackageVersion=${{ env.nugetVersion }} --configuration Release -o ${{ github.workspace }}/PackedNuget 2>&1
+          $rid = '${{ matrix.rid }}'
+          $ridArgs = if ($rid -eq 'pointer') { @() } else { @('-r', $rid) }
+          $packOutput = & dotnet pack @ridArgs -p:PackageVersion=${{ env.nugetVersion }} --configuration Release -o ${{ github.workspace }}/PackedNuget 2>&1
           $exitCode = $LASTEXITCODE
           $unexpectedErrors = $packOutput | Where-Object {
             $_ -match 'error' -and
@@ -54,9 +71,9 @@ jobs:
           }
           # NU5017 is a known false positive for RID-specific tool pointer packages (SDK 10 bug):
           # NuGet validation does not yet recognise DotnetToolSettings.xml as package content.
-          # All packages are created correctly. Verify they exist before proceeding.
+          # The package is created correctly. Verify it exists before proceeding.
           $pkgs = Get-ChildItem "${{ github.workspace }}/PackedNuget" -Filter "*.nupkg"
-          if ($pkgs.Count -lt 5) { throw "Expected at least 5 .nupkg files but found $($pkgs.Count)" }
+          if ($pkgs.Count -lt 1) { throw "Expected a .nupkg file but found none" }
           if ($exitCode -ne 0) {
             Write-Warning "dotnet pack returned exit code $exitCode, but only the known NU5017 false positive was detected."
           }
@@ -66,13 +83,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v7
         with:
-          name: NuGet
+          name: NuGet-${{ matrix.rid }}
           path: ${{ github.workspace }}/PackedNuget
 
   deploy:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    needs: build-and-test
+    needs: pack
     environment:
       name: "Production"
       url: "https://www.nuget.org/packages/vstest-to-mtp"
@@ -82,7 +99,8 @@ jobs:
       - name: Download artifact from build job
         uses: actions/download-artifact@v8
         with:
-          name: NuGet
+          pattern: NuGet-*
+          merge-multiple: true
 
       # RID-specific packages MUST be published before the top-level pointer package.
       # If the pointer package is published first, installs will fail until all sub-packages exist.
@@ -90,7 +108,7 @@ jobs:
       - name: Push RID-specific NuGet packages
         run: |
           $version = "${{ github.ref }}".substring(11)
-          foreach ($rid in @("win-x64", "linux-x64", "osx-arm64", "any")) {
+          foreach ($rid in @("win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-arm64", "any")) {
             $pkg = "vstest-to-mtp.$rid.$version.nupkg"
             if (Test-Path $pkg) {
               dotnet nuget push $pkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
