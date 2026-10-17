@@ -119,7 +119,8 @@ internal static class MsBuildHostLauncher
     }
 
     // The runtime the machine host would roll forward to: the newest Microsoft.NETCore.App at or above $minMajor that `dotnet` reports, null when
-    // `dotnet` is missing, does not answer or has none. Mirrors .NET roll-forward: a pre-release runtime is only considered when no release fits.
+    // `dotnet` is missing, does not answer or has none. Mirrors .NET roll-forward: a pre-release runtime is only considered when no release fits,
+    // unless DOTNET_ROLL_FORWARD_TO_PRERELEASE=1 opts in, which lets the host choose a newer pre-release over a release.
     private static Version? MachineRuntimeVersion(int minMajor)
     {
         ProcessStartInfo start = new(DotNetHostPath(), "--list-runtimes")
@@ -140,7 +141,8 @@ internal static class MsBuildHostLauncher
                 return null;
             }
 
-            return ParseNewestRuntime(output.GetAwaiter().GetResult(), minMajor);
+            bool allowPreReleaseOverRelease = Environment.GetEnvironmentVariable("DOTNET_ROLL_FORWARD_TO_PRERELEASE") == "1";
+            return ParseNewestRuntime(output.GetAwaiter().GetResult(), minMajor, allowPreReleaseOverRelease);
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)
         {
@@ -149,8 +151,9 @@ internal static class MsBuildHostLauncher
     }
 
     // Lines look like: Microsoft.NETCore.App 10.0.13 [path to the shared runtime folder]
-    // A pre-release runtime (11.0.0-rc.2) counts only when no release version qualifies, as in the host's own roll-forward.
-    private static Version? ParseNewestRuntime(string listRuntimes, int minMajor)
+    // A pre-release runtime (11.0.0-rc.2) counts only when no release version qualifies, as in the host's own roll-forward; with the opt-in the
+    // newest of either kind wins.
+    private static Version? ParseNewestRuntime(string listRuntimes, int minMajor, bool allowPreReleaseOverRelease)
     {
         Version? newestRelease = null;
         Version? newestPreRelease = null;
@@ -170,6 +173,11 @@ internal static class MsBuildHostLauncher
             {
                 newestRelease = newestRelease is null || version > newestRelease ? version : newestRelease;
             }
+        }
+
+        if (allowPreReleaseOverRelease && newestRelease is not null && newestPreRelease is not null)
+        {
+            return newestPreRelease > newestRelease ? newestPreRelease : newestRelease;
         }
 
         return newestRelease ?? newestPreRelease;

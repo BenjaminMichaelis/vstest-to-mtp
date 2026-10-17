@@ -58,8 +58,8 @@ foreach ($type in 'lts', 'sts') {
 
 # --- Scenarios ---------------------------------------------------------------------------------------------------------------------------------------
 $scenarios = [System.Collections.Generic.List[object]]::new()
-function Add-Scenario([string]$Name, [object[]]$Installs, $PinMajor, [string]$ProjectTargets = $null, [string]$Scope = 'all') {
-    $scenarios.Add([ordered]@{ name = $Name; installs = $Installs; pinMajor = $PinMajor; minimumSdk = $minimum; projectTargets = $ProjectTargets; scope = $Scope })
+function Add-Scenario([string]$Name, [object[]]$Installs, $PinMajor, [string]$ProjectTargets = $null, [string]$Scope = 'all', [bool]$PrereleaseOptIn = $false) {
+    $scenarios.Add([ordered]@{ name = $Name; installs = $Installs; pinMajor = $PinMajor; minimumSdk = $minimum; projectTargets = $ProjectTargets; scope = $Scope; rollForwardToPrerelease = $PrereleaseOptIn })
 }
 
 foreach ($m in $majors) {
@@ -69,6 +69,13 @@ foreach ($m in $majors) {
 # Older repository on a machine that also has the bundled major, and the bundled major's repository next to the newest release.
 if ($bundled - 1 -ge $minimum) { Add-Scenario "sdk$($bundled - 1)-and-$bundled" @(@{ major = $bundled - 1 }, @{ major = $bundled }) ($bundled - 1) }
 if ($newestAny -gt $bundled) { Add-Scenario "sdk$bundled-and-$newestAny" @(@{ major = $bundled }, @{ major = $newestAny }) $bundled }
+
+# The repository pins the newest SDK while the machine also has the bundled major: the host stays on the bundled major's release runtime unless the
+# newest is stable, or DOTNET_ROLL_FORWARD_TO_PRERELEASE=1 lets it move to a newer pre-release (a release candidate today). Both settings.
+if ($newestAny -gt $bundled) {
+    Add-Scenario "sdk$newestAny-and-$bundled" @(@{ major = $bundled }, @{ major = $newestAny }) $newestAny
+    Add-Scenario "sdk$newestAny-and-$bundled-prerelease-opt-in" @(@{ major = $bundled }, @{ major = $newestAny }) $newestAny $null 'all' $true
+}
 
 Add-Scenario "runtime$bundled-no-sdk" @(@{ major = $bundled; runtimeOnly = $true }) $null
 Add-Scenario 'no-dotnet' @() $null

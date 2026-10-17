@@ -122,12 +122,19 @@ $sdkNames = @(Get-ChildItem (Join-Path $dotnetRoot 'sdk') -Directory -ErrorActio
 Write-Host "Isolated machine: runtimes [$($runtimeNames -join ', ')], SDKs [$($sdkNames -join ', ')]"
 
 # The runtime the machine host would run on, by .NET roll-forward: the highest release at or above the bundled major, and only when there is
-# none a pre-release one (11.0.0-rc.2). Null when nothing qualifies.
+# none a pre-release one (11.0.0-rc.2). With DOTNET_ROLL_FORWARD_TO_PRERELEASE=1 (the scenario's opt-in) a pre-release may win over a release.
+# Null when nothing qualifies.
+$preReleaseOptIn = $scenario.PSObject.Properties.Name -contains 'rollForwardToPrerelease' -and [bool]$scenario.rollForwardToPrerelease
 $qualifying = @($runtimeNames | ForEach-Object { [pscustomobject]@{ Major = ([version](($_ -split '-')[0])).Major; Stable = $_ -notmatch '-' } } | Where-Object { $_.Major -ge $bundledMajor })
 $machineRuntime = $null
-foreach ($stable in $true, $false) {
-    $candidates = @($qualifying | Where-Object { $_.Stable -eq $stable })
-    if ($candidates.Count -gt 0) { $machineRuntime = [int]($candidates | Measure-Object Major -Maximum).Maximum; break }
+if ($preReleaseOptIn -and $qualifying.Count -gt 0) {
+    $machineRuntime = [int]($qualifying | Measure-Object Major -Maximum).Maximum
+}
+else {
+    foreach ($stable in $true, $false) {
+        $candidates = @($qualifying | Where-Object { $_.Stable -eq $stable })
+        if ($candidates.Count -gt 0) { $machineRuntime = [int]($candidates | Measure-Object Major -Maximum).Maximum; break }
+    }
 }
 
 # --- The repository the tool inventories ----------------------------------------------------------------------------------------------------
@@ -193,7 +200,7 @@ $isolation = [ordered]@{
     DOTNET_ROOT = $dotnetRoot
     DOTNET_HOST_PATH = $null
     DOTNET_ROLL_FORWARD = $null
-    DOTNET_ROLL_FORWARD_TO_PRERELEASE = $null
+    DOTNET_ROLL_FORWARD_TO_PRERELEASE = $(if ($preReleaseOptIn) { '1' } else { $null })
     DOTNET_MULTILEVEL_LOOKUP = '0'
     DOTNET_CLI_TELEMETRY_OPTOUT = '1'
     DOTNET_NOLOGO = '1'
