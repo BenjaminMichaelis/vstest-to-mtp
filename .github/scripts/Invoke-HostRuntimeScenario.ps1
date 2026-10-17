@@ -86,19 +86,33 @@ foreach ($install in @($scenario.installs)) {
     $runtimeOnly = $install.PSObject.Properties.Name -contains 'runtimeOnly' -and $install.runtimeOnly
     $channel = "$($install.major).0"
     Write-Host "::group::Installing .NET $channel$(if ($runtimeOnly) { ' (runtime only)' }) into the isolated root"
-    if ($IsWindows) {
-        # A hashtable so the arguments are bound by name (an array would be passed positionally).
-        $installArgs = @{ InstallDir = $dotnetRoot; Channel = $channel; NoPath = $true }
-        if ($runtimeOnly) { $installArgs.Runtime = 'dotnet' }
-        & $installScript @installArgs
-    }
-    else {
-        $installArgs = @($installScript, '--install-dir', $dotnetRoot, '--channel', $channel, '--no-path')
-        if ($runtimeOnly) { $installArgs += @('--runtime', 'dotnet') }
-        & bash @installArgs
+    # The download is the one flaky step (the SDK archives are 250-300 MB); retry it a few times before giving up.
+    $installed = $false
+    for ($attempt = 1; $attempt -le 3 -and -not $installed; $attempt++) {
+        try {
+            $global:LASTEXITCODE = 0
+            if ($IsWindows) {
+                # A hashtable so the arguments are bound by name (an array would be passed positionally).
+                $installArgs = @{ InstallDir = $dotnetRoot; Channel = $channel; NoPath = $true }
+                if ($runtimeOnly) { $installArgs.Runtime = 'dotnet' }
+                & $installScript @installArgs
+            }
+            else {
+                $installArgs = @($installScript, '--install-dir', $dotnetRoot, '--channel', $channel, '--no-path')
+                if ($runtimeOnly) { $installArgs += @('--runtime', 'dotnet') }
+                & bash @installArgs
+            }
+
+            if ($LASTEXITCODE -ne 0) { throw "dotnet-install of $channel exited with $LASTEXITCODE" }
+            $installed = $true
+        }
+        catch {
+            Write-Host "::warning::Installing .NET $channel failed (attempt $attempt of 3): $($_.Exception.Message)"
+            if ($attempt -eq 3) { throw }
+            Start-Sleep -Seconds (5 * $attempt)
+        }
     }
 
-    if ($LASTEXITCODE -ne 0) { throw "dotnet-install of $channel exited with $LASTEXITCODE" }
     Write-Host '::endgroup::'
 }
 
@@ -120,6 +134,19 @@ foreach ($stable in $true, $false) {
 $repo = Join-Path $work 'repo'
 Copy-Item -Recurse -Path $FixtureRoot -Destination $repo
 Get-ChildItem $repo -Recurse -Directory -Force | Where-Object { $_.Name -in 'bin', 'obj' } | Remove-Item -Recurse -Force
+
+# What the projects target (a scenario may override the fixture's net10.0 in every project: an older target, a multi-target, .NET Framework, ...).
+$projectTargets = if ($scenario.PSObject.Properties.Name -contains 'projectTargets' -and $scenario.projectTargets) { [string]$scenario.projectTargets } else { $null }
+$expectedTargets = @()
+if ($projectTargets) {
+    $expectedTargets = @($projectTargets -split ';' | Sort-Object -CaseSensitive -Unique)
+    $element = if ($expectedTargets.Count -gt 1) { "<TargetFrameworks>$projectTargets</TargetFrameworks>" } else { "<TargetFramework>$projectTargets</TargetFramework>" }
+    foreach ($project in Get-ChildItem $repo -Recurse -File -Filter '*.csproj') {
+        $text = Get-Content $project.FullName -Raw
+        if ($text -notmatch '<TargetFramework>[^<]*</TargetFramework>') { throw "'$($project.FullName)' has no <TargetFramework> to replace." }
+        Set-Content -Path $project.FullName -Value ($text -replace '<TargetFramework>[^<]*</TargetFramework>', $element) -NoNewline
+    }
+}
 
 $pinnedSdk = $null
 if ($null -ne $scenario.pinMajor) {
@@ -202,7 +229,19 @@ function Get-Outcome($Run) {
     $codes = @($result.blockers | ForEach-Object { $_.code } | Select-Object -Unique)
     if ($codes.Count -eq 0) {
         $kinds = @($result.projects | ForEach-Object { $_.classification } | Sort-Object)
-        return @{ Outcome = $(if (($kinds -join ',') -eq 'Production,TestApplication') { 'ok' } else { 'unexpected-classification' }); Codes = @() }
+        if (($kinds -join ',') -ne 'Production,TestApplication') { return @{ Outcome = 'unexpected-classification'; Codes = @() } }
+
+        # Every project must be evaluated for exactly the target frameworks it declares, whatever they are.
+        if ($expectedTargets.Count -gt 0) {
+            foreach ($project in $result.projects) {
+                $actualTargets = @($project.targetFrameworks | ForEach-Object { $_.targetFramework } | Sort-Object -CaseSensitive -Unique)
+                if (($actualTargets -join ';') -ne ($expectedTargets -join ';')) {
+                    return @{ Outcome = "unexpected-target-frameworks ($($project.path): $($actualTargets -join ';'), expected $($expectedTargets -join ';'))"; Codes = @() }
+                }
+            }
+        }
+
+        return @{ Outcome = 'ok'; Codes = @() }
     }
 
     return @{ Outcome = $codes[0]; Codes = $codes }

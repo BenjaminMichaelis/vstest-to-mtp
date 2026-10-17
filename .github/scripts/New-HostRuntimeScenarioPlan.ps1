@@ -58,8 +58,8 @@ foreach ($type in 'lts', 'sts') {
 
 # --- Scenarios ---------------------------------------------------------------------------------------------------------------------------------------
 $scenarios = [System.Collections.Generic.List[object]]::new()
-function Add-Scenario([string]$Name, [object[]]$Installs, $PinMajor) {
-    $scenarios.Add([ordered]@{ name = $Name; installs = $Installs; pinMajor = $PinMajor; minimumSdk = $minimum })
+function Add-Scenario([string]$Name, [object[]]$Installs, $PinMajor, [string]$ProjectTargets = $null, [string]$Scope = 'all') {
+    $scenarios.Add([ordered]@{ name = $Name; installs = $Installs; pinMajor = $PinMajor; minimumSdk = $minimum; projectTargets = $ProjectTargets; scope = $Scope })
 }
 
 foreach ($m in $majors) {
@@ -73,12 +73,28 @@ if ($newestAny -gt $bundled) { Add-Scenario "sdk$bundled-and-$newestAny" @(@{ ma
 Add-Scenario "runtime$bundled-no-sdk" @(@{ major = $bundled; runtimeOnly = $true }) $null
 Add-Scenario 'no-dotnet' @() $null
 
+# What the projects target is independent of the machine: an older target, a multi-target, a .NET Framework target and, when a newer major than the
+# bundled one exists, a target newer than most SDKs know. Crossed with the two ends of the supported range (the bundled major's SDK and the oldest
+# supported SDK) rather than every machine, and on Linux only (the evaluation does not depend on the OS).
+$older = "net$($minimum - 2).0"
+$targetSets = [System.Collections.Generic.List[object]]::new()
+$targetSets.Add(@{ key = 'older'; value = $older })
+$targetSets.Add(@{ key = 'multi'; value = "$older;net$bundled.0" })
+$targetSets.Add(@{ key = 'framework'; value = 'net48' })
+if ($newestAny -gt $bundled) { $targetSets.Add(@{ key = 'newer'; value = "net$newestAny.0" }) }
+foreach ($sdk in @($bundled, $minimum | Select-Object -Unique)) {
+    foreach ($set in $targetSets) {
+        Add-Scenario "sdk$sdk-targets-$($set.key)" @(@{ major = $sdk }) $sdk $set.value 'linux'
+    }
+}
+
 $machines = @(
     @{ os = 'ubuntu-latest'; rid = 'linux-x64' },
     @{ os = 'windows-latest'; rid = 'win-x64' }
 )
 $include = foreach ($machine in $machines) {
     foreach ($scenario in $scenarios) {
+        if ($scenario.scope -eq 'linux' -and $machine.rid -ne 'linux-x64') { continue }
         [ordered]@{ os = $machine.os; rid = $machine.rid; name = $scenario.name; spec = ($scenario | ConvertTo-Json -Compress -Depth 5) }
     }
 }
