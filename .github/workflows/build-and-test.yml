@@ -112,3 +112,63 @@ jobs:
           name: failed-tests-playlist-${{ matrix.os }}
           path: test-results/failed-tests.playlist
           if-no-files-found: ignore
+
+  # The tool ships as a Native AOT executable per platform plus a CoreCLR `any` fallback, each with an MSBuild host process next to it.
+  # None of that is exercised by the unit tests (they run the CoreCLR build), so pack the real packages, install them like a user and
+  # run them over the committed fixtures. Native AOT needs the build OS to match the target RID, hence one RID per OS.
+  pack-and-smoke-test:
+    name: pack-and-smoke-test (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, rid: linux-x64 }
+          - { os: windows-latest, rid: win-x64 }
+          - { os: macos-latest, rid: osx-arm64 }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: "./global.json"
+
+      # Native AOT links with the platform toolchain.
+      - name: Install Native AOT prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      # NU5017 is a known false positive for the pointer package (SDK 10): the package is still created. Any other error fails.
+      - name: Pack
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'packages'
+          foreach ($rid in @($null, '${{ matrix.rid }}', 'any')) {
+            $ridArgs = if ($rid) { @('-r', $rid) } else { @() }
+            $output = & dotnet pack VsTestToMtp/VsTestToMtp.csproj @ridArgs --configuration Release -o $out 2>&1
+            $output | ForEach-Object { Write-Host $_ }
+            $unexpected = $output | Where-Object { $_ -match 'error' -and $_ -notmatch 'NU5017' -and $_ -notmatch '^Build failed with \d+ error\(s\)' }
+            if ($LASTEXITCODE -ne 0 -and $unexpected) { throw "dotnet pack $ridArgs failed" }
+          }
+          Get-ChildItem $out -Filter '*.nupkg' | ForEach-Object { Write-Host $_.Name }
+          "PACKAGE_DIR=$out" >> $env:GITHUB_ENV
+
+      - name: Smoke test the ${{ matrix.rid }} package
+        run: .\.github\scripts\Invoke-PackedToolSmokeTest.ps1 -PackageDirectory $env:PACKAGE_DIR -Rid ${{ matrix.rid }}
+
+      - name: Smoke test the any package
+        run: .\.github\scripts\Invoke-PackedToolSmokeTest.ps1 -PackageDirectory $env:PACKAGE_DIR -Rid any
+
+      - name: Verify fixtures are unchanged
+        run: |
+          $changes = git status --porcelain -- fixtures
+          if ($changes) {
+            Write-Host $changes
+            throw 'The smoke test modified the committed fixtures.'
+          }

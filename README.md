@@ -18,6 +18,12 @@ dotnet tool install --global vstest-to-mtp
 vstest-to-mtp --help
 ```
 
+Print a read-only JSON inventory of a project or solution (MSBuild-evaluated state, test project classification, blockers):
+
+```cli
+vstest-to-mtp inventory path/to/Solution.slnx
+```
+
 ## Development
 
 The repository uses Central Package Management (`Directory.Packages.props`), a `global.json` that pins the SDK and selects the native Microsoft.Testing.Platform `dotnet test` mode, and TUnit for tests.
