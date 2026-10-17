@@ -29,6 +29,9 @@ internal static class MsBuildHostLauncher
     // The process could not be started at all (for example there is no `dotnet` on the machine).
     private const int NotStarted = -1;
 
+    // The host ran but its response is missing or unreadable.
+    private const int ProtocolFailure = -2;
+
     /// <param name="request">What to evaluate.</param>
     /// <param name="baseDirectory">Where the host folders are laid out; the running tool's own directory when not given.</param>
     /// <param name="runtime">Which runtime to use; see <see cref="MsBuildHostRuntime"/>.</param>
@@ -242,38 +245,60 @@ internal static class MsBuildHostLauncher
         string responseFile = Path.Combine(Path.GetTempPath(), $"vstest-to-mtp-{Guid.NewGuid():N}.json");
         start.ArgumentList.Add(responseFile);
 
+        Process process;
         try
         {
-            using Process process = Process.Start(start) ?? throw new InvalidOperationException($"'{fileName}' did not start.");
+            process = Process.Start(start) ?? throw new InvalidOperationException($"'{fileName}' did not start.");
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            // Only a failure to start the process counts as "not started" (and so lets Auto try the other host).
+            return (null, NotStarted, $"The MSBuild host could not be started: {ex.Message}");
+        }
 
-            // Drain both streams while writing the request so a full pipe can never stall the host.
-            Task<string> error = process.StandardError.ReadToEndAsync();
-            Task<string> output = process.StandardOutput.ReadToEndAsync();
-
-            process.StandardInput.Write(JsonSerializer.Serialize(request, InventoryJsonContext.Default.HostRequest));
-            process.StandardInput.Close();
-            process.WaitForExit();
-
-            if (process.ExitCode != 0)
+        using (process)
+        {
+            try
             {
-                return (null, process.ExitCode, $"The MSBuild host exited with code {process.ExitCode}: {error.GetAwaiter().GetResult().Trim()}");
-            }
+                // Drain both streams while writing the request so a full pipe can never stall the host.
+                Task<string> error = process.StandardError.ReadToEndAsync();
+                Task<string> output = process.StandardOutput.ReadToEndAsync();
 
-            using FileStream result = File.OpenRead(responseFile);
-            HostResponse? response = JsonSerializer.Deserialize(result, InventoryJsonContext.Default.HostResponse);
-            return response is null
-                ? (null, 0, "The MSBuild host returned no result.")
-                : (response, 0, string.Empty);
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException or JsonException)
-        {
-            return (null, NotStarted, $"The MSBuild host could not be run: {ex.Message}");
-        }
-        finally
-        {
-            File.Delete(responseFile);
+                try
+                {
+                    process.StandardInput.Write(JsonSerializer.Serialize(request, InventoryJsonContext.Default.HostRequest));
+                    process.StandardInput.Close();
+                }
+                catch (IOException)
+                {
+                    // The host exited before reading its request (hostfxr does when no runtime fits); its exit code says why.
+                }
+
+                process.WaitForExit();
+
+                if (process.ExitCode != 0)
+                {
+                    return (null, process.ExitCode, $"The MSBuild host exited with code {process.ExitCode}: {error.GetAwaiter().GetResult().Trim()}");
+                }
+
+                using FileStream result = File.OpenRead(responseFile);
+                HostResponse? response = JsonSerializer.Deserialize(result, InventoryJsonContext.Default.HostResponse);
+                return response is null
+                    ? (null, ProtocolFailure, "The MSBuild host returned no result.")
+                    : (response, 0, string.Empty);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                // The host ran and exited normally but its answer is missing or unreadable: a defect, never a reason to try another runtime.
+                return (null, ProtocolFailure, $"The MSBuild host's response could not be read: {ex.Message}");
+            }
+            finally
+            {
+                File.Delete(responseFile);
+            }
         }
     }
+
 
     private static HostResponse Failure(HostRequest request, string message, string remediation)
     {

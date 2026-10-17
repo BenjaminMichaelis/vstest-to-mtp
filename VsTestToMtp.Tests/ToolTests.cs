@@ -6,6 +6,8 @@ using System.Text.Json;
 using VsTestToMtp;
 using VsTestToMtp.Tests.Fixtures;
 
+// The inventory cases evaluate with MSBuild, and other classes in this group set process-wide environment variables for the host.
+[NotInParallel("MSBuildEvaluation")]
 public class ToolTests
 {
     [Test]

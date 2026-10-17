@@ -136,6 +136,24 @@ public class MsBuildHostLauncherTests
     }
 
     [Test]
+    public async Task HostThatExitsWithoutAnAnswer_DoesNotFallBackToTheOtherHost()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Skip.Test("Needs a program that exits 0 without output; simulated with /usr/bin/true on Unix.");
+            return;
+        }
+
+        // The bundled host (preferred: newer) runs and exits 0 but never writes its response. The healthy machine host must not be tried.
+        using HostLayout layout = HostLayout.Create(frameworkHost: HostBehavior.Working, bundledHost: HostBehavior.ExitsWithoutAnswering, bundledRuntimeVersion: "99.0.0");
+
+        InventoryResult result = layout.Inventory();
+
+        await Assert.That(result.Projects.Single().Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
+        await Assert.That(result.Projects.Single().Blockers.Single().Message).Contains("response");
+    }
+
+    [Test]
     public async Task BundledHostWithoutExecutePermission_IsMadeExecutable()
     {
         if (OperatingSystem.IsWindows())
@@ -160,6 +178,7 @@ public class MsBuildHostLauncherTests
         Working,
         NeedsAnUninstalledRuntime,
         CrashesOnStart,
+        ExitsWithoutAnswering,
     }
 
     private sealed class HostLayout : IDisposable
@@ -214,6 +233,10 @@ public class MsBuildHostLauncherTests
             {
                 case HostBehavior.NeedsAnUninstalledRuntime:
                     RewriteRuntimeConfig(destination);
+                    break;
+                case HostBehavior.ExitsWithoutAnswering:
+                    // /usr/bin/true starts, exits 0 and writes nothing: a host that ran fine but left no response behind.
+                    File.Copy("/usr/bin/true", Path.Combine(destination, "vstest-to-mtp-msbuild-host"), overwrite: true);
                     break;
                 case HostBehavior.CrashesOnStart:
                     // The host cannot load its contract assembly, so it dies with an unhandled exception after the runtime started.
