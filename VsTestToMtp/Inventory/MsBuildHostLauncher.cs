@@ -136,7 +136,14 @@ internal static class MsBuildHostLauncher
             using Process process = Process.Start(start) ?? throw new InvalidOperationException("dotnet did not start.");
             Task<string> output = process.StandardOutput.ReadToEndAsync();
             _ = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(TimeSpan.FromSeconds(30)) || process.ExitCode != 0)
+            if (!process.WaitForExit(TimeSpan.FromSeconds(30)))
+            {
+                // A hung probe (or a DOTNET_HOST_PATH wrapper that never answers) must not outlive this call: every inventory would leak another one.
+                TerminateProcessTree(process);
+                return null;
+            }
+
+            if (process.ExitCode != 0)
             {
                 return null;
             }
@@ -147,6 +154,19 @@ internal static class MsBuildHostLauncher
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)
         {
             return null;
+        }
+    }
+
+    private static void TerminateProcessTree(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            // Already gone (or not ours to kill): nothing left to clean up.
         }
     }
 

@@ -81,7 +81,7 @@
     managed MSBuild. The host is built first but not referenced; its output is laid out next to the CLI by the targets below.
     -->
     <ProjectReference Include="..\VsTestToMtp.MsBuildHost\VsTestToMtp.MsBuildHost.csproj" ReferenceOutputAssembly="false" Private="false"
-                      GlobalPropertiesToRemove="PublishAot;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed" />
+                      GlobalPropertiesToRemove="PublishAot;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed;OutDir;OutputPath;_CommandLineDefinedOutputPath" />
   </ItemGroup>
 
   <!--
@@ -89,16 +89,25 @@
   (the tests) get it in their output too. Publishing lays out its own copies; see PublishMsBuildHost.
   -->
   <Target Name="IncludeMsBuildHost" BeforeTargets="AssignTargetPaths" DependsOnTargets="ResolveProjectReferences">
-    <!-- Ask the host project where its output is (it honors an artifacts path, BaseOutputPath and so on) instead of assuming bin/<configuration>/<tfm>. -->
+    <!--
+    Ask the host project where its output is (it honors an artifacts path, BaseOutputPath and so on) instead of assuming bin/<configuration>/<tfm>.
+    OutDir/OutputPath are removed so a shared output directory (-o, -p:OutDir=) is not forced on the host: it must keep its own, or this folder
+    would copy the CLI and its earlier copy of the host into msbuild-host/ again on every build.
+    -->
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\VsTestToMtp.MsBuildHost\VsTestToMtp.MsBuildHost.csproj" Targets="GetTargetPath"
-             RemoveProperties="PublishAot;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed">
+             RemoveProperties="PublishAot;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed;OutDir;OutputPath;_CommandLineDefinedOutputPath">
       <Output TaskParameter="TargetOutputs" ItemName="_MsBuildHostTargetPath" />
     </MSBuild>
     <PropertyGroup>
       <_MsBuildHostOutputDirectory>@(_MsBuildHostTargetPath->'%(RootDir)%(Directory)')</_MsBuildHostOutputDirectory>
     </PropertyGroup>
     <ItemGroup>
-      <_MsBuildHostFile Include="$(_MsBuildHostOutputDirectory)**\*" Exclude="$(_MsBuildHostOutputDirectory)**\*.pdb" />
+      <!--
+      The host's own output folder also receives the self-contained build for a target platform (bin/.../win-x64/, from packing for that platform).
+      That is the bundled runtime, not part of the framework-dependent copy, so runtime-identifier folders are left out.
+      -->
+      <_MsBuildHostFile Include="$(_MsBuildHostOutputDirectory)**\*"
+                        Exclude="$(_MsBuildHostOutputDirectory)**\*.pdb;$(_MsBuildHostOutputDirectory)win-*\**;$(_MsBuildHostOutputDirectory)linux-*\**;$(_MsBuildHostOutputDirectory)osx-*\**;$(_MsBuildHostOutputDirectory)any\**" />
       <Content Include="@(_MsBuildHostFile)" Link="msbuild-host\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" Pack="false" />
     </ItemGroup>
   </Target>
