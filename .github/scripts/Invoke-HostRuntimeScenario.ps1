@@ -267,7 +267,18 @@ foreach ($package in $packages) {
         $run = Invoke-Mode $package.Tool $mode
         $actual = Get-Outcome $run
         $passed = if ($expected -in 'ok', 'cannot-run') { $actual.Outcome -eq $expected } else { $actual.Codes -contains $expected }
-        $rows += [pscustomobject]@{ Scenario = $name; Package = $package.Name; Mode = $mode; Expected = $expected; Actual = $(if ($actual.Codes.Count) { $actual.Codes -join '+' } else { $actual.Outcome }); Result = $(if ($passed) { 'pass' } else { 'FAIL' }) }
+
+        # The plan fixes some outcomes whatever is installed. Expectations derived from the real machine must agree with them: if they do not, this
+        # is not the machine the scenario was planned for (the wrong SDK installed, a channel that moved), and passing would test something else.
+        $required = @($scenario.required | Where-Object { $_.package -eq $package.Id -and $_.mode -eq $mode })
+        $planned = $required.Count -gt 0
+        $matchesPlan = -not $planned -or $required[0].outcome -eq $expected
+
+        $rows += [pscustomobject]@{ Scenario = $name; Package = $package.Name; Mode = $mode; Expected = $expected; Planned = $(if ($planned) { $required[0].outcome } else { '-' }); Actual = $(if ($actual.Codes.Count) { $actual.Codes -join '+' } else { $actual.Outcome }); Result = $(if ($passed -and $matchesPlan) { 'pass' } else { 'FAIL' }) }
+        if (-not $matchesPlan) {
+            $failures += "$($package.Name) --host-runtime ${mode}: the plan requires '$($required[0].outcome)' but this machine implies '$expected'. The installed .NET is not what the scenario was planned for (runtimes [$($runtimeNames -join ', ')], SDKs [$($sdkNames -join ', ')])."
+        }
+
         if (-not $passed) {
             $failures += "$($package.Name) --host-runtime ${mode}: expected '$expected' but got '$($actual.Outcome)' (exit $($run.ExitCode))`n$($run.Output.Substring(0, [Math]::Min(1500, $run.Output.Length)))"
         }
@@ -280,9 +291,9 @@ if ($env:GITHUB_STEP_SUMMARY) {
     "### Host runtime scenario: ``$name``" | Add-Content $env:GITHUB_STEP_SUMMARY
     "Machine host runtime $(if ($null -ne $machineRuntime) { $machineRuntime } else { 'none' }), bundled runtime $bundledMajor, pinned SDK $(if ($pinnedSdk) { $pinnedSdk } else { 'none' })" | Add-Content $env:GITHUB_STEP_SUMMARY
     '' | Add-Content $env:GITHUB_STEP_SUMMARY
-    '| Package | Mode | Expected | Actual | Result |' | Add-Content $env:GITHUB_STEP_SUMMARY
-    '|---|---|---|---|---|' | Add-Content $env:GITHUB_STEP_SUMMARY
-    foreach ($row in $rows) { "| $($row.Package) | $($row.Mode) | $($row.Expected) | $($row.Actual) | $($row.Result) |" | Add-Content $env:GITHUB_STEP_SUMMARY }
+    '| Package | Mode | Required by plan | Expected | Actual | Result |' | Add-Content $env:GITHUB_STEP_SUMMARY
+    '|---|---|---|---|---|---|' | Add-Content $env:GITHUB_STEP_SUMMARY
+    foreach ($row in $rows) { "| $($row.Package) | $($row.Mode) | $($row.Planned) | $($row.Expected) | $($row.Actual) | $($row.Result) |" | Add-Content $env:GITHUB_STEP_SUMMARY }
 }
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
