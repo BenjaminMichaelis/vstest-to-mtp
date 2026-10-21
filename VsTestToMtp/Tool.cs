@@ -1,5 +1,8 @@
 using System.CommandLine;
 using System.CommandLine.Help;
+using System.Text.Json;
+
+using VsTestToMtp.Inventory;
 
 namespace VsTestToMtp;
 
@@ -28,6 +31,7 @@ public static class Tool
 
         // No migration behavior yet: invoking the tool without arguments shows help.
         rootCommand.SetAction(parseResult => new HelpAction().Invoke(parseResult));
+        rootCommand.Subcommands.Add(CreateInventoryCommand());
 
         return rootCommand;
     }
@@ -37,4 +41,44 @@ public static class Tool
     /// </summary>
     public static int Run(string[] args, InvocationConfiguration? configuration = null) =>
         CreateRootCommand().Parse(args).Invoke(configuration);
+
+    private static Command CreateInventoryCommand()
+    {
+        Argument<string> path = new("path")
+        {
+            Description = "A .csproj, .sln or .slnx file, or a directory containing exactly one solution or project.",
+        };
+        Option<string?> root = new("--root")
+        {
+            Description = "Directory the output's relative paths are anchored to. Defaults to the nearest ancestor containing .git.",
+        };
+
+        Option<MsBuildHostRuntime> hostRuntime = new("--host-runtime")
+        {
+            Description = "Which .NET runtime evaluates the projects: auto (the machine's runtime unless the bundled one is newer), machine, or bundled.",
+            DefaultValueFactory = _ => MsBuildHostRuntime.Auto,
+        };
+
+        Command inventory = new("inventory", "Prints a read-only JSON inventory of the selected projects: MSBuild-evaluated state, test project classification and blockers.")
+        {
+            path,
+            root,
+            hostRuntime,
+        };
+
+        inventory.SetAction(parseResult =>
+        {
+            InventoryResult result = InventoryBuilder.Build(
+                parseResult.GetRequiredValue(path),
+                new InventoryOptions(
+                    RootPath: parseResult.GetValue(root),
+                    HostRuntime: parseResult.GetRequiredValue(hostRuntime)));
+
+            parseResult.InvocationConfiguration.Output.WriteLine(
+                JsonSerializer.Serialize(result, InventoryOutputJsonContext.Default.InventoryResult));
+            return 0;
+        });
+
+        return inventory;
+    }
 }

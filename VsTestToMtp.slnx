@@ -8,6 +8,8 @@
     <File Path="NuGet.config" />
     <File Path="README.md" />
   </Folder>
+  <Project Path="VsTestToMtp.Contracts/VsTestToMtp.Contracts.csproj" />
+  <Project Path="VsTestToMtp.MsBuildHost/VsTestToMtp.MsBuildHost.csproj" />
   <Project Path="VsTestToMtp/VsTestToMtp.csproj" />
   <Project Path="VsTestToMtp.Tests/VsTestToMtp.Tests.csproj" />
 </Solution>

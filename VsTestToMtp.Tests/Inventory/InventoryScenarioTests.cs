@@ -921,9 +921,14 @@ public class InventoryScenarioTests
 
         InventoryResult result = bad.Inventory("App/App.csproj");
         await Assert.That(result.GlobalJson).IsNull();
-        // MSBuild's SDK resolver cannot read a malformed global.json either, so the project itself cannot be evaluated.
-        await Assert.That(result.Blockers.Select(b => (b.Code, b.Project))).IsEquivalentTo(
-            [(BlockerCode.MalformedGlobalJson, (string?)null), (BlockerCode.EvaluationFailed, "App/App.csproj")]);
+        // MSBuild's SDK resolver cannot read a malformed global.json either, so the project itself cannot be evaluated. With no usable
+        // global.json `dotnet` falls back to the newest installed SDK; when that one needs a newer runtime than ours (a newer SDK or a
+        // pre-release is installed) the project is refused for that reason instead.
+        await Assert.That(result.Blockers.Select(b => b.Code)).Contains(BlockerCode.MalformedGlobalJson);
+        BlockerCode[] others = [.. result.Blockers.Select(b => b.Code).Where(c => c != BlockerCode.MalformedGlobalJson).Distinct()];
+        await Assert.That(others).IsNotEmpty();
+        await Assert.That(others.All(c => c is BlockerCode.EvaluationFailed or BlockerCode.MsBuildSdkNewerThanRuntime)).IsTrue();
+        await Assert.That(result.Blockers.Count(b => b.Code == BlockerCode.MalformedGlobalJson)).IsEqualTo(1);
     }
 
     [Test]

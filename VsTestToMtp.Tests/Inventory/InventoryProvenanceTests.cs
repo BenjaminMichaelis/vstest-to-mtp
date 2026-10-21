@@ -102,12 +102,8 @@ public class InventoryProvenanceTests
     [Test]
     public async Task FilesFromAVersionedSdkPackage_AreNotRepositoryFiles_WhereverTheyAreExtracted()
     {
-        // NUGET_PACKAGES decides where the package goes when it is set, which these tests control themselves.
-        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
-        {
-            Skip.Test("NUGET_PACKAGES is set, so the SDK package location is not under this test's control.");
-            return;
-        }
+        // These tests decide where the packages folder is, so the machine's own NUGET_PACKAGES (set on many developer machines) must not leak in.
+        using EnvironmentVariableScope withoutNuGetPackages = new("NUGET_PACKAGES", null);
 
         // The SDK package comes from a local feed and is extracted to a folder with no "NuGet" in its path,
         // so nothing about the path says what it is; only MSBuild's SDK resolution does.
@@ -143,11 +139,8 @@ public class InventoryProvenanceTests
     [Test]
     public async Task VersionedSdkPackage_IsNeverExtractedIntoTheRepository_EvenWhenNuGetConfigPutsThePackagesFolderThere()
     {
-        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
-        {
-            Skip.Test("NUGET_PACKAGES is set, so the SDK package location is not under this test's control.");
-            return;
-        }
+        // These tests decide where the packages folder is, so the machine's own NUGET_PACKAGES (set on many developer machines) must not leak in.
+        using EnvironmentVariableScope withoutNuGetPackages = new("NUGET_PACKAGES", null);
 
         string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-sdk-cache", Guid.NewGuid().ToString("N"));
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
@@ -191,11 +184,8 @@ public class InventoryProvenanceTests
     [Arguments("NuGet.Config")]
     public async Task NuGetPackages_IsRedirectedToTheDefault_WhenANuGetConfigSetsGlobalPackagesFolder(string fileName)
     {
-        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
-        {
-            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
-            return;
-        }
+        // These tests decide where the packages folder is, so the machine's own NUGET_PACKAGES (set on many developer machines) must not leak in.
+        using EnvironmentVariableScope withoutNuGetPackages = new("NUGET_PACKAGES", null);
 
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
             .Write(fileName, LocalFeedNuGetConfig)
@@ -210,11 +200,8 @@ public class InventoryProvenanceTests
     [Test]
     public async Task NuGetPackages_IsNotTouched_WhenNoNuGetConfigSetsGlobalPackagesFolder()
     {
-        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
-        {
-            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
-            return;
-        }
+        // These tests decide where the packages folder is, so the machine's own NUGET_PACKAGES (set on many developer machines) must not leak in.
+        using EnvironmentVariableScope withoutNuGetPackages = new("NUGET_PACKAGES", null);
 
         // A NuGet.config that only configures sources cannot move the packages folder, so the environment must stay untouched.
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
@@ -228,11 +215,8 @@ public class InventoryProvenanceTests
     [Test]
     public async Task NuGetPackages_IsNotTouched_WhenThereIsNoNuGetConfigAtAll()
     {
-        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
-        {
-            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
-            return;
-        }
+        // These tests decide where the packages folder is, so the machine's own NUGET_PACKAGES (set on many developer machines) must not leak in.
+        using EnvironmentVariableScope withoutNuGetPackages = new("NUGET_PACKAGES", null);
 
         using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject("App/App.csproj", ShowNuGetPackages);
 
@@ -242,11 +226,8 @@ public class InventoryProvenanceTests
     [Test]
     public async Task NuGetPackages_UsesAnExplicitDirectory_EvenWithoutANuGetConfig()
     {
-        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
-        {
-            Skip.Test("NUGET_PACKAGES is set, so the scope leaves it alone.");
-            return;
-        }
+        // These tests decide where the packages folder is, so the machine's own NUGET_PACKAGES (set on many developer machines) must not leak in.
+        using EnvironmentVariableScope withoutNuGetPackages = new("NUGET_PACKAGES", null);
 
         string directory = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-explicit-packages");
         using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject("App/App.csproj", ShowNuGetPackages);
@@ -261,11 +242,8 @@ public class InventoryProvenanceTests
     public async Task UnconditionalMissingImportInsideAVersionedSdk_IsReported_NotDroppedBecauseTheFileIsExternal()
     {
         // Who owns a file decides where a fix would go, not whether MSBuild's picture of the project is complete.
-        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 })
-        {
-            Skip.Test("NUGET_PACKAGES is set, so the SDK package location is not under this test's control.");
-            return;
-        }
+        // These tests decide where the packages folder is, so the machine's own NUGET_PACKAGES (set on many developer machines) must not leak in.
+        using EnvironmentVariableScope withoutNuGetPackages = new("NUGET_PACKAGES", null);
 
         string cache = Path.Combine(Path.GetTempPath(), "vstest-to-mtp-sdk-cache", Guid.NewGuid().ToString("N"));
         using ScenarioWorkspace workspace = new ScenarioWorkspace()

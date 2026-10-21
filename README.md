@@ -18,6 +18,12 @@ dotnet tool install --global vstest-to-mtp
 vstest-to-mtp --help
 ```
 
+Print a read-only JSON inventory of a project or solution (MSBuild-evaluated state, test project classification, blockers). `--host-runtime auto|machine|bundled` picks the .NET runtime that evaluates the projects: by default (`auto`) the machine's runtime unless the bundled one is newer; `machine` and `bundled` pin one and never fall back to the other (the portable `any` package has no bundled runtime).
+
+```cli
+vstest-to-mtp inventory path/to/Solution.slnx
+```
+
 ## Development
 
 The repository uses Central Package Management (`Directory.Packages.props`), a `global.json` that pins the SDK and selects the native Microsoft.Testing.Platform `dotnet test` mode, and TUnit for tests.
@@ -32,7 +38,7 @@ dotnet run --project VsTestToMtp -- --help
 
 `VsTestToMtp.Inventory.InventoryBuilder.Build(path)` inventories a `.csproj`, `.sln` or `.slnx` without modifying the repository: exact solution membership, MSBuild-evaluated properties, package references and project references per target framework (with file/line, condition and import-chain provenance), the imported `Directory.Build.props/targets` and `Directory.Packages.props`, the effective `global.json`, and CI/script files (generated and hidden directories are skipped). Projects are classified as test applications from evaluated `IsTestProject` and package evidence declared in the project itself, never from file names. It also reports which test frameworks (`TestFramework`) and runner platforms (`TestRunnerKind`: VSTest and/or Microsoft.Testing.Platform) the project's packages indicate. Anything that cannot be determined (missing imports, evaluation failures, environment-dependent conditions, `IsTestProject` conditions in `Directory.Build.props`, ...) is reported as an actionable blocker instead of a guess.
 
-Evaluation uses the .NET SDK's MSBuild (located with `Microsoft.Build.Locator`, honoring `global.json`), so an installed SDK is required at runtime. Nothing in the repository is restored, built or written, and `obj/*.nuget.g.*` files are ignored so results do not depend on restore state. As with any MSBuild evaluation, an SDK referenced with a version (for example `MSTest.Sdk/3.6.4`) that is not in the NuGet cache yet is downloaded there, as `dotnet restore` would; set `MSBUILDDISABLENUGETSDKRESOLVER=1` to prevent that (such projects are then reported as blockers). This is also what keeps classification correct: `Microsoft.NET.Test.Sdk` sets `IsTestProject=true` for every project that references it once restored, so a production project that merely references it must not be treated as a test application on that basis.
+Evaluation uses the .NET SDK's MSBuild (located with `Microsoft.Build.Locator`, honoring `global.json`), so an installed SDK is required at runtime. Because the CLI is a Native AOT executable and cannot load managed MSBuild assemblies, evaluation runs in a separate CoreCLR process, `VsTestToMtp.MsBuildHost` (the `vstest-to-mtp-msbuild-host` program in the package), started once per inventory run: the CLI sends a JSON request on its standard input and reads a JSON response from a file (see `MsBuildHostLauncher`). Which runtime it uses is set by `--host-runtime` (or `InventoryOptions.HostRuntime`): by default the machine's installed .NET runtime unless the self-contained copy bundled with the AOT packages is newer (a runtime that cannot start falls back to the other one); `machine` and `bundled` pin one. Nothing in the repository is restored, built or written, and `obj/*.nuget.g.*` files are ignored so results do not depend on restore state. As with any MSBuild evaluation, an SDK referenced with a version (for example `MSTest.Sdk/3.6.4`) that is not in the NuGet cache yet is downloaded there, as `dotnet restore` would; set `MSBUILDDISABLENUGETSDKRESOLVER=1` to prevent that (such projects are then reported as blockers). This is also what keeps classification correct: `Microsoft.NET.Test.Sdk` sets `IsTestProject=true` for every project that references it once restored, so a production project that merely references it must not be treated as a test application on that basis.
 
 See [`docs/inventory-msbuild-usage.md`](docs/inventory-msbuild-usage.md) for the documented MSBuild API constraints, how the inventory complies, and what was verified against a real MSBuild.
 
@@ -41,19 +47,28 @@ See [`docs/inventory-msbuild-usage.md`](docs/inventory-msbuild-usage.md) for the
 [`fixtures/`](fixtures/README.md) contains checked-in MSTest, NUnit, xUnit v3 and xUnit v2 sample projects (each in plain and Central Package Management variants) generated from the official templates and running under VSTest. Converter tests work on isolated copies of them. CI builds and tests every fixture in place.
 ### Packing and installing locally
 
-The tool uses [RID-specific packaging](https://learn.microsoft.com/dotnet/core/tools/rid-specific-tools). A single `dotnet pack` produces self-contained packages for `win-x64`, `linux-x64` and `osx-arm64`, a portable `any` CoreCLR fallback, and a top-level pointer package:
+The tool uses [RID-specific packaging](https://learn.microsoft.com/dotnet/core/tools/rid-specific-tools) with Native AOT for `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64` and `osx-arm64` and a portable CoreCLR `any` fallback. Native AOT compilation requires the build OS to match the target RID's OS, so each package is packed on its own platform (CI does this in a matrix):
 
 ```cli
-dotnet pack --configuration Release -o ./artifacts/package/release
+dotnet pack --configuration Release -o ./artifacts/package/release                # pointer package (any platform)
+dotnet pack -r win-x64 --configuration Release -o ./artifacts/package/release     # on Windows (x64 or Arm64 hosts)
+dotnet pack -r win-arm64 --configuration Release -o ./artifacts/package/release   # on Windows
+dotnet pack -r linux-x64 --configuration Release -o ./artifacts/package/release   # on Linux
+dotnet pack -r linux-arm64 --configuration Release -o ./artifacts/package/release # on Linux
+dotnet pack -r osx-arm64 --configuration Release -o ./artifacts/package/release   # on macOS (Apple silicon)
+dotnet pack -r any -p:PublishAot=false --configuration Release -o ./artifacts/package/release   # portable CoreCLR fallback
 ```
 
 This creates:
 
-- `vstest-to-mtp.win-x64.<version>.nupkg`
-- `vstest-to-mtp.linux-x64.<version>.nupkg`
-- `vstest-to-mtp.osx-arm64.<version>.nupkg`
-- `vstest-to-mtp.any.<version>.nupkg` (portable CoreCLR fallback)
+- `vstest-to-mtp.win-x64.<version>.nupkg` (Native AOT, with the MSBuild host framework-dependent and self-contained)
+- `vstest-to-mtp.linux-x64.<version>.nupkg` (same)
+- `vstest-to-mtp.win-arm64.<version>.nupkg` and `vstest-to-mtp.linux-arm64.<version>.nupkg` (same)
+- `vstest-to-mtp.osx-arm64.<version>.nupkg` (same)
+- `vstest-to-mtp.any.<version>.nupkg` (portable CoreCLR fallback, framework-dependent MSBuild host)
 - `vstest-to-mtp.<version>.nupkg` (top-level pointer package)
+
+Native AOT builds need the platform's native toolchain (the Visual Studio C++ build tools on Windows, `clang` and `zlib1g-dev` on Linux, Xcode command line tools on macOS).
 
 > **Note:** `dotnet pack` may emit `NU5017` on the pointer package. This is a known false positive in .NET SDK 10: NuGet validation does not yet recognize `DotnetToolSettings.xml` as package content. All packages are created correctly.
 
