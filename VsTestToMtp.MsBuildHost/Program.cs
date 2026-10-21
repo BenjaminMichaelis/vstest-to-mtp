@@ -19,7 +19,20 @@ if (request is null)
 }
 
 HostResponse response = InventoryHost.Evaluate(request);
-using (FileStream output = File.Create(args[0]))
+// CreateNew: the launcher names a fresh path, so an existing file means something else got there first and is never overwritten (or followed). On Unix the
+// file is owner-only (0600) from the moment it exists, since the temp directory is shared and the response describes a private repository.
+FileStreamOptions responseOptions = new()
+{
+    Mode = FileMode.CreateNew,
+    Access = FileAccess.Write,
+    Share = FileShare.None,
+};
+if (!OperatingSystem.IsWindows())
+{
+    responseOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+}
+
+using (FileStream output = new(args[0], responseOptions))
 {
     JsonSerializer.Serialize(output, response, InventoryJsonContext.Default.HostResponse);
 }

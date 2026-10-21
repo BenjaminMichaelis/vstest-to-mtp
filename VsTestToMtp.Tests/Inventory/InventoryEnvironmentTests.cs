@@ -4,8 +4,6 @@ using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 
-using Microsoft.Build.Locator;
-
 using VsTestToMtp.Inventory;
 
 // MSBuild evaluation blocks threads; running many evaluations in parallel starves the thread pool and is far slower than serial.
@@ -31,58 +29,6 @@ public class InventoryEnvironmentTests
     }
 
     [Test]
-    public async Task SelectionPinnedToADifferentSdkThanAnEarlierOne_IsEvaluatedWithItsOwnSdk()
-    {
-        // Every evaluation runs in its own MSBuild host process, so unlike an in-process MSBuild (registered once per process)
-        // a later selection pinned to another SDK is evaluated with that SDK instead of being refused.
-        using ScenarioWorkspace pinnedLikeTheFixtures = new ScenarioWorkspace().WriteProject("App/App.csproj");
-        ProjectInventory evaluated = pinnedLikeTheFixtures.Inventory("App/App.csproj").Projects.Single();
-        await Assert.That(evaluated.Blockers).IsEmpty();
-
-        string registered = InstancesFor(pinnedLikeTheFixtures.RootPath).First().MSBuildPath;
-        VisualStudioInstance? other = InstancesFor(pinnedLikeTheFixtures.RootPath)
-            .FirstOrDefault(i => i.MSBuildPath != registered && i.Version.Major >= MinimumSdkMajorVersion && !IsNewerThanRuntime(i.Version));
-        if (other is null)
-        {
-            Skip.Test("Needs a second installed .NET SDK (8.0 or newer, no newer than the test runtime).");
-            return;
-        }
-
-        using ScenarioWorkspace pinnedElsewhere = new ScenarioWorkspace()
-            .Write("global.json", Pin(other.Version))
-            .WriteProject("App/App.csproj");
-        ProjectInventory evaluatedElsewhere = pinnedElsewhere.Inventory("App/App.csproj").Projects.Single();
-
-        await Assert.That(evaluatedElsewhere.Classification).IsEqualTo(ProjectClassification.Production);
-        await Assert.That(evaluatedElsewhere.Blockers).IsEmpty();
-    }
-
-    [Test]
-    public async Task SelectionPinnedToAnSdkNewerThanTheRuntime_IsRefused_NotEvaluatedWithAnotherSdk()
-    {
-        // MSBuildLocator hides such SDKs by default, which used to make a different SDK come first without any error.
-        VisualStudioInstance? newer = InstancesFor(Environment.CurrentDirectory).FirstOrDefault(i => IsNewerThanRuntime(i.Version));
-        if (newer is null)
-        {
-            Skip.Test($"Needs an installed .NET SDK newer than the {Environment.Version.Major}.{Environment.Version.Minor} test runtime.");
-            return;
-        }
-
-        using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .Write("global.json", Pin(newer.Version))
-            .WriteProject("App/App.csproj");
-
-        // The host normally rolls forward to a newer installed runtime (which makes such an SDK usable); pin it to this runtime's
-        // major so the refusal is deterministic whatever else is installed. The roll-forward itself is covered by the host's
-        // RollForward setting, not by this test.
-        using EnvironmentVariableScope pinned = new("DOTNET_ROLL_FORWARD", "Minor");
-        ProjectInventory project = workspace.Inventory("App/App.csproj").Projects.Single();
-
-        await Assert.That(project.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildSdkNewerThanRuntime]);
-    }
-
-    [Test]
     public async Task MsBuildHostThatCannotBeStarted_IsReportedAsMsBuildHostFailed()
     {
         // The test layout has no self-contained host to fall back to, so a machine without a usable `dotnet` has nowhere to run it.
@@ -96,24 +42,6 @@ public class InventoryEnvironmentTests
         await Assert.That(project.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildHostFailed]);
         await Assert.That(result.Blockers.Select(b => b.Code)).Contains(BlockerCode.MsBuildHostFailed);
     }
-
-    private const int MinimumSdkMajorVersion = 8;
-
-    private static string Pin(Version sdk) => $$"""{ "sdk": { "version": "{{sdk}}", "rollForward": "disable" } }""";
-
-    // Same rule MSBuildLocator applies by default: an SDK's MSBuild needs at least the runtime it shipped with.
-    private static bool IsNewerThanRuntime(Version sdk) =>
-        sdk.Major > Environment.Version.Major || (sdk.Major == Environment.Version.Major && sdk.Minor > Environment.Version.Minor);
-
-    private static VisualStudioInstance[] InstancesFor(string workingDirectory) =>
-    [
-        .. MSBuildLocator.QueryVisualStudioInstances(new VisualStudioInstanceQueryOptions
-        {
-            DiscoveryTypes = DiscoveryType.DotNetSdk,
-            WorkingDirectory = workingDirectory,
-            AllowAllRuntimeVersions = true,
-        }),
-    ];
 
     [Test]
     [SkipUnlessReadDenialSupported]
@@ -136,33 +64,6 @@ public class InventoryEnvironmentTests
             await Assert.That(blocker.Location!.File).IsEqualTo("locked");
             await Assert.That(blocker.Remediation).IsNotEmpty();
         }
-    }
-
-    [Test]
-    public async Task SdkOlderThanTheSupportedFloor_IsRejected_WithoutLoadingItsMsBuild()
-    {
-        // 8.0 is the oldest SDK whose MSBuild we support (we compile against Microsoft.Build 17.8).
-        VisualStudioInstance[] sdks = [.. MSBuildLocator.QueryVisualStudioInstances(
-            new VisualStudioInstanceQueryOptions { DiscoveryTypes = DiscoveryType.DotNetSdk })];
-        VisualStudioInstance? tooOld = sdks.OrderBy(i => i.Version).FirstOrDefault(i => i.Version.Major < 8);
-        if (tooOld is null)
-        {
-            Skip.Test("Needs an installed .NET SDK older than 8.0.");
-            return;
-        }
-
-        using ScenarioWorkspace old = new ScenarioWorkspace()
-            .Write("global.json", $$"""{ "sdk": { "version": "{{tooOld.Version}}", "rollForward": "disable" } }""")
-            .WriteProject("App/App.csproj");
-        using ScenarioWorkspace current = new ScenarioWorkspace().WriteProject("App/App.csproj");
-
-        ProjectInventory rejected = old.Inventory("App/App.csproj").Projects.Single();
-        ProjectInventory ok = current.Inventory("App/App.csproj").Projects.Single();
-
-        await Assert.That(rejected.Classification).IsEqualTo(ProjectClassification.Unknown);
-        await Assert.That(rejected.Blockers.Select(b => b.Code)).IsEquivalentTo([BlockerCode.MsBuildSdkUnsupported]);
-        // Rejecting it must not have registered (and so poisoned) MSBuild for later selections.
-        await Assert.That(ok.Blockers).IsEmpty();
     }
 
     [Test]

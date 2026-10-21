@@ -1,7 +1,7 @@
 namespace VsTestToMtp.Inventory;
 
 /// <summary>The one place blockers are de-duplicated and put in their deterministic order.</summary>
-internal static class BlockerOrdering
+public static class BlockerOrdering
 {
     /// <summary>Removes duplicates and orders by project, code, location and message, so output never depends on evaluation order.</summary>
     public static List<InventoryBlocker> Normalize(IEnumerable<InventoryBlocker> blockers) =>

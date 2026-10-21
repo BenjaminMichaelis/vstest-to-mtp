@@ -62,7 +62,7 @@ dotnet pack -r win-arm64 --configuration Release -o ./artifacts/package/release 
 dotnet pack -r linux-x64 --configuration Release -o ./artifacts/package/release   # on Linux
 dotnet pack -r linux-arm64 --configuration Release -o ./artifacts/package/release # on Linux
 dotnet pack -r osx-arm64 --configuration Release -o ./artifacts/package/release   # on macOS (Apple silicon)
-dotnet pack -r any --configuration Release -o ./artifacts/package/release         # portable CoreCLR fallback
+dotnet pack -r any -p:PublishAot=false --configuration Release -o ./artifacts/package/release   # portable CoreCLR fallback
 ```
 
 This creates:

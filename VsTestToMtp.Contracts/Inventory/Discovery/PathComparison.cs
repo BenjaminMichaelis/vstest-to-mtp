@@ -10,10 +10,10 @@ public static class PathComparison
     /// <summary>Whether the tool treats two paths differing only by case as the same path on this OS.</summary>
     public static bool IsCaseInsensitive { get; } = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
 
-    internal static StringComparison Comparison { get; } = IsCaseInsensitive ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+    public static StringComparison Comparison { get; } = IsCaseInsensitive ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-    internal static StringComparer Comparer { get; } = IsCaseInsensitive ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+    public static StringComparer Comparer { get; } = IsCaseInsensitive ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
-    internal static bool Equal(string left, string right) =>
+    public static bool Equal(string left, string right) =>
         string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), Comparison);
 }

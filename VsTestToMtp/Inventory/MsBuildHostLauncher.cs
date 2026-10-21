@@ -29,6 +29,9 @@ internal static class MsBuildHostLauncher
     // The process could not be started at all (for example there is no `dotnet` on the machine).
     private const int NotStarted = -1;
 
+    // The host ran but its response is missing or unreadable.
+    private const int ProtocolFailure = -2;
+
     /// <param name="request">What to evaluate.</param>
     /// <param name="baseDirectory">Where the host folders are laid out; the running tool's own directory when not given.</param>
     /// <param name="runtime">Which runtime to use; see <see cref="MsBuildHostRuntime"/>.</param>
@@ -109,14 +112,16 @@ internal static class MsBuildHostLauncher
             return [HostKind.Bundled];
         }
 
-        Version? machine = MachineRuntimeVersion();
         Version? bundled = BundledRuntimeVersion(bundledDirectory);
+        Version? machine = MachineRuntimeVersion(bundled?.Major ?? 0);
         bool preferBundled = machine is null || (bundled is not null && bundled > machine);
         return preferBundled ? [HostKind.Bundled, HostKind.Machine] : [HostKind.Machine, HostKind.Bundled];
     }
 
-    // The newest Microsoft.NETCore.App the machine's `dotnet` reports; null when `dotnet` is missing or does not answer.
-    private static Version? MachineRuntimeVersion()
+    // The runtime the machine host would roll forward to: the newest Microsoft.NETCore.App at or above $minMajor that `dotnet` reports, null when
+    // `dotnet` is missing, does not answer or has none. Mirrors .NET roll-forward: a pre-release runtime is only considered when no release fits,
+    // unless DOTNET_ROLL_FORWARD_TO_PRERELEASE=1 opts in, which lets the host choose a newer pre-release over a release.
+    private static Version? MachineRuntimeVersion(int minMajor)
     {
         ProcessStartInfo start = new(DotNetHostPath(), "--list-runtimes")
         {
@@ -131,12 +136,20 @@ internal static class MsBuildHostLauncher
             using Process process = Process.Start(start) ?? throw new InvalidOperationException("dotnet did not start.");
             Task<string> output = process.StandardOutput.ReadToEndAsync();
             _ = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(TimeSpan.FromSeconds(30)) || process.ExitCode != 0)
+            if (!process.WaitForExit(TimeSpan.FromSeconds(30)))
+            {
+                // A hung probe (or a DOTNET_HOST_PATH wrapper that never answers) must not outlive this call: every inventory would leak another one.
+                TerminateProcessTree(process);
+                return null;
+            }
+
+            if (process.ExitCode != 0)
             {
                 return null;
             }
 
-            return ParseNewestRuntime(output.GetAwaiter().GetResult());
+            bool allowPreReleaseOverRelease = Environment.GetEnvironmentVariable("DOTNET_ROLL_FORWARD_TO_PRERELEASE") == "1";
+            return ParseNewestRuntime(output.GetAwaiter().GetResult(), minMajor, allowPreReleaseOverRelease);
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)
         {
@@ -144,22 +157,50 @@ internal static class MsBuildHostLauncher
         }
     }
 
-    // Lines look like: Microsoft.NETCore.App 10.0.13 [path to the shared runtime folder]
-    // Pre-release runtimes are skipped: the host's roll-forward ignores them too, so they are never what it would run on.
-    private static Version? ParseNewestRuntime(string listRuntimes)
+    private static void TerminateProcessTree(Process process)
     {
-        Version? newest = null;
+        try
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            // Already gone (or not ours to kill): nothing left to clean up.
+        }
+    }
+
+    // Lines look like: Microsoft.NETCore.App 10.0.13 [path to the shared runtime folder]
+    // A pre-release runtime (11.0.0-rc.2) counts only when no release version qualifies, as in the host's own roll-forward; with the opt-in the
+    // newest of either kind wins.
+    private static Version? ParseNewestRuntime(string listRuntimes, int minMajor, bool allowPreReleaseOverRelease)
+    {
+        Version? newestRelease = null;
+        Version? newestPreRelease = null;
         foreach (string line in listRuntimes.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length >= 2 && parts[0] == "Microsoft.NETCore.App"
-                && !parts[1].Contains('-') && Version.TryParse(parts[1], out Version? version) && (newest is null || version > newest))
+            if (parts.Length < 2 || parts[0] != "Microsoft.NETCore.App" || !Version.TryParse(parts[1].Split('-')[0], out Version? version) || version.Major < minMajor)
             {
-                newest = version;
+                continue;
+            }
+
+            if (parts[1].Contains('-'))
+            {
+                newestPreRelease = newestPreRelease is null || version > newestPreRelease ? version : newestPreRelease;
+            }
+            else
+            {
+                newestRelease = newestRelease is null || version > newestRelease ? version : newestRelease;
             }
         }
 
-        return newest;
+        if (allowPreReleaseOverRelease && newestRelease is not null && newestPreRelease is not null)
+        {
+            return newestPreRelease > newestRelease ? newestPreRelease : newestRelease;
+        }
+
+        return newestRelease ?? newestPreRelease;
     }
 
     // Written next to the bundled host when the package is built (the runtime pack version the self-contained publish used).
@@ -242,38 +283,60 @@ internal static class MsBuildHostLauncher
         string responseFile = Path.Combine(Path.GetTempPath(), $"vstest-to-mtp-{Guid.NewGuid():N}.json");
         start.ArgumentList.Add(responseFile);
 
+        Process process;
         try
         {
-            using Process process = Process.Start(start) ?? throw new InvalidOperationException($"'{fileName}' did not start.");
+            process = Process.Start(start) ?? throw new InvalidOperationException($"'{fileName}' did not start.");
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            // Only a failure to start the process counts as "not started" (and so lets Auto try the other host).
+            return (null, NotStarted, $"The MSBuild host could not be started: {ex.Message}");
+        }
 
-            // Drain both streams while writing the request so a full pipe can never stall the host.
-            Task<string> error = process.StandardError.ReadToEndAsync();
-            Task<string> output = process.StandardOutput.ReadToEndAsync();
-
-            process.StandardInput.Write(JsonSerializer.Serialize(request, InventoryJsonContext.Default.HostRequest));
-            process.StandardInput.Close();
-            process.WaitForExit();
-
-            if (process.ExitCode != 0)
+        using (process)
+        {
+            try
             {
-                return (null, process.ExitCode, $"The MSBuild host exited with code {process.ExitCode}: {error.GetAwaiter().GetResult().Trim()}");
-            }
+                // Drain both streams while writing the request so a full pipe can never stall the host.
+                Task<string> error = process.StandardError.ReadToEndAsync();
+                Task<string> output = process.StandardOutput.ReadToEndAsync();
 
-            using FileStream result = File.OpenRead(responseFile);
-            HostResponse? response = JsonSerializer.Deserialize(result, InventoryJsonContext.Default.HostResponse);
-            return response is null
-                ? (null, 0, "The MSBuild host returned no result.")
-                : (response, 0, string.Empty);
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException or JsonException)
-        {
-            return (null, NotStarted, $"The MSBuild host could not be run: {ex.Message}");
-        }
-        finally
-        {
-            File.Delete(responseFile);
+                try
+                {
+                    process.StandardInput.Write(JsonSerializer.Serialize(request, InventoryJsonContext.Default.HostRequest));
+                    process.StandardInput.Close();
+                }
+                catch (IOException)
+                {
+                    // The host exited before reading its request (hostfxr does when no runtime fits); its exit code says why.
+                }
+
+                process.WaitForExit();
+
+                if (process.ExitCode != 0)
+                {
+                    return (null, process.ExitCode, $"The MSBuild host exited with code {process.ExitCode}: {error.GetAwaiter().GetResult().Trim()}");
+                }
+
+                using FileStream result = File.OpenRead(responseFile);
+                HostResponse? response = JsonSerializer.Deserialize(result, InventoryJsonContext.Default.HostResponse);
+                return response is null
+                    ? (null, ProtocolFailure, "The MSBuild host returned no result.")
+                    : (response, 0, string.Empty);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                // The host ran and exited normally but its answer is missing or unreadable: a defect, never a reason to try another runtime.
+                return (null, ProtocolFailure, $"The MSBuild host's response could not be read: {ex.Message}");
+            }
+            finally
+            {
+                File.Delete(responseFile);
+            }
         }
     }
+
 
     private static HostResponse Failure(HostRequest request, string message, string remediation)
     {
