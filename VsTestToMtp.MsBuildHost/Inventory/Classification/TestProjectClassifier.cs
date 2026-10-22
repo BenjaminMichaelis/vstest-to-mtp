@@ -20,6 +20,7 @@ internal static class TestProjectClassifier
                 Runners: [],
                 TargetFrameworks: [.. evaluated.TargetFrameworks.Select(tf => ToState(tf, ProjectClassification.Unknown, false, []))],
                 Imports: evaluated.Imports,
+                Sdks: evaluated.Sdks,
                 Blockers: BlockerOrdering.Normalize(blockers));
         }
 
@@ -27,7 +28,7 @@ internal static class TestProjectClassifier
         foreach (EvaluatedTargetFramework framework in evaluated.TargetFrameworks)
         {
             (ProjectClassification classification, bool hasLibraryDependency, List<string> evidence) =
-                ClassifyTargetFramework(framework, evaluated.Path, blockers);
+                ClassifyTargetFramework(framework, evaluated, blockers);
             states.Add(ToState(framework, classification, hasLibraryDependency, evidence));
         }
 
@@ -70,14 +71,16 @@ internal static class TestProjectClassifier
             Runners: runners,
             TargetFrameworks: states,
             Imports: evaluated.Imports,
+                Sdks: evaluated.Sdks,
             Blockers: BlockerOrdering.Normalize(blockers));
     }
 
     private static (ProjectClassification Classification, bool HasLibraryDependency, List<string> Evidence) ClassifyTargetFramework(
         EvaluatedTargetFramework framework,
-        string project,
+        EvaluatedProject evaluated,
         List<InventoryBlocker> blockers)
     {
+        string project = evaluated.Path;
         List<string> evidence = [];
 
         PackageReferenceState[] testPackages = [.. framework.Packages.Where(p => TestPackageCatalog.TryGet(p.Name, out _))];
@@ -108,8 +111,9 @@ internal static class TestProjectClassifier
         }
 
         // Only evidence declared in the project file itself can establish a test application: a package added to
-        // every project through a shared props file says nothing about which projects are tests.
-        PackageReferenceState[] local = [.. testPackages.Where(p => p.Definition.IsFromProjectFile)];
+        // every project through a shared props file says nothing about which projects are tests. The project's own SDK
+        // (Sdk="MSTest.Sdk/x.y") is the project file's choice too, so what that SDK declares counts as well.
+        PackageReferenceState[] local = [.. testPackages.Where(p => p.Definition.IsFromProjectFile || IsFromProjectSdk(p, evaluated))];
         bool localFramework = local.Any(p => Has(p, framework: true));
         bool localRunner = local.Any(p => Has(p, framework: false));
         if (localFramework && localRunner)
@@ -129,6 +133,18 @@ internal static class TestProjectClassifier
 
         return (ProjectClassification.Production, hasLibraryDependency, evidence);
     }
+
+    /// <summary>
+    /// Whether <paramref name="package"/> is declared by an SDK the project file references itself: in a file outside the repository,
+    /// reached from the project file through SDK and package files only. A hop through any other repository file (a
+    /// Directory.Build.props that imports an SDK, say) makes it shared. Every repository file a project imports is in its imports.
+    /// </summary>
+    private static bool IsFromProjectSdk(PackageReferenceState package, EvaluatedProject evaluated) =>
+        !package.Definition.IsRepositoryFile
+        && package.Definition.ImportChain is [var first, ..]
+        && first.ImportedBy.File == evaluated.Path
+        && package.Definition.ImportChain.All(step =>
+            step.ImportedBy.File == evaluated.Path || !evaluated.Imports.Any(i => i.File == step.ImportedBy.File));
 
     private static bool Has(PackageReferenceState package, bool framework) =>
         TestPackageCatalog.TryGet(package.Name, out TestPackageInfo? info)

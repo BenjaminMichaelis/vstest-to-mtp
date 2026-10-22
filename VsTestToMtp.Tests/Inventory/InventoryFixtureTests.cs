@@ -1,6 +1,5 @@
 namespace VsTestToMtp.Tests.Inventory;
 
-using System.Collections.Concurrent;
 using System.Text.Json;
 
 using TUnit.Assertions.Enums;
@@ -12,8 +11,8 @@ using VsTestToMtp.Tests.Fixtures;
 [NotInParallel("MSBuildEvaluation")]
 public class InventoryFixtureTests
 {
-    private const string TestProjectPath = "tests/Calculator.Tests/Calculator.Tests.csproj";
-    private const string ProductionProjectPath = "src/Calculator/Calculator.csproj";
+    private const string TestProjectPath = FixtureInventory.TestProject;
+    private const string ProductionProjectPath = FixtureInventory.ProductionProject;
 
     [Test]
     [MethodDataSource(typeof(FixtureDataSources), nameof(FixtureDataSources.All))]
@@ -164,16 +163,9 @@ public class InventoryFixtureTests
         await Assert.That(result.Projects.Single().Classification).IsEqualTo(ProjectClassification.TestApplication);
     }
 
-    // The text of the line a location points at, read from the committed fixture.
-    private static string LineAt(FixtureInfo fixture, SourceLocation location) =>
-        File.ReadAllLines(Path.Combine(fixture.RootPath, location.File.Replace('/', Path.DirectorySeparatorChar)))[location.Line - 1];
+    private static string LineAt(FixtureInfo fixture, SourceLocation location) => FixtureInventory.LineAt(fixture, location);
 
-    // MSBuild evaluation is slow, so evaluate each fixture once and share the (immutable) result between tests.
-    private static readonly ConcurrentDictionary<string, Lazy<InventoryResult>> Cache = new();
+    private static InventoryResult Inventory(FixtureInfo fixture) => FixtureInventory.Of(fixture);
 
-    private static InventoryResult Inventory(FixtureInfo fixture) =>
-        Cache.GetOrAdd(fixture.Name, _ => new Lazy<InventoryResult>(() => Build(fixture))).Value;
-
-    private static InventoryResult Build(FixtureInfo fixture) =>
-        InventoryBuilder.Build(Path.Combine(fixture.RootPath, "Fixture.slnx"), new InventoryOptions(fixture.RootPath));
+    private static InventoryResult Build(FixtureInfo fixture) => FixtureInventory.Build(fixture);
 }

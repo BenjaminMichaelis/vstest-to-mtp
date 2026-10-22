@@ -2,9 +2,9 @@ namespace VsTestToMtp.Inventory;
 
 /// <summary>
 /// Parses booleans the way MSBuild conditions do. Use this only for properties MSBuild itself interprets (such as
-/// <c>IsTestProject</c>); NuGet reads its own properties differently (see <see cref="NuGetBoolean"/>).
+/// <c>IsTestProject</c>); NuGet reads its own properties differently (see <c>NuGetBoolean</c> in the MSBuild host).
 /// </summary>
-internal static class MsBuildBoolean
+public static class MsBuildBoolean
 {
     // MSBuild accepts exactly these spellings, case-insensitively, with no trimming:
     // https://github.com/dotnet/msbuild/blob/74878b50aab1c07a7cdcaa15f28115768388cdcc/src/Framework/Utilities/ConversionUtilities.cs#L101-L123

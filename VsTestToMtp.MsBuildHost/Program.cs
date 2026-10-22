@@ -64,6 +64,7 @@ internal static class InventoryHost
                         Runners: [],
                         TargetFrameworks: [],
                         Imports: [],
+                        Sdks: [],
                         Blockers: [blocker])),
                 ]);
         }
