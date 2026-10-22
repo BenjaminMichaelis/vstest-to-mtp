@@ -78,8 +78,8 @@ public static class CompatibilityPreflight
         }
 
         string[] vstest = [.. projects
-            .Where(p => p.Preflight.Readiness == MigrationReadiness.Blocked && p.Inventory.Classification == ProjectClassification.TestApplication
-                && (p.Inventory.Runners.Count == 0 || p.Inventory.Runners.Contains(TestRunnerKind.VSTest)))
+            .Where(p => p is { Preflight.Readiness: MigrationReadiness.Blocked, Inventory.Classification: ProjectClassification.TestApplication }
+                && (p.Inventory.Runners is [] || p.Inventory.Runners.Contains(TestRunnerKind.VSTest)))
             .Select(p => p.Inventory.Path)];
         string[] undetermined = [.. projects
             .Where(p => p.Inventory.Classification is ProjectClassification.Unknown or ProjectClassification.Mixed)
@@ -212,23 +212,27 @@ public static class CompatibilityPreflight
                     v2?.Definition.Location);
             }
 
-            if (frameworks.Length > 1)
+            switch (frameworks)
             {
-                Error(PreflightCode.MultipleTestFrameworks,
-                    $"'{project.Path}' references more than one test framework ({string.Join(", ", frameworks)}), so the rules cannot pick one.",
-                    "Keep one test framework per test application, then rerun.");
-                return null;
-            }
+                case []:
+                    Error(PreflightCode.UnsupportedTestFramework,
+                        $"'{project.Path}' is a test application, but none of its packages is a test framework the rules support (MSTest, NUnit, xUnit v3, TUnit).",
+                        "Reference the test framework with a supported package, or set IsTestProject=false if it is not a test application.");
+                    return null;
 
-            if (frameworks.Length == 0)
-            {
-                Error(PreflightCode.UnsupportedTestFramework,
-                    $"'{project.Path}' is a test application, but none of its packages is a test framework the rules support (MSTest, NUnit, xUnit v3, TUnit).",
-                    "Reference the test framework with a supported package, or set IsTestProject=false if it is not a test application.");
-                return null;
-            }
+                // Already reported above.
+                case [TestFramework.XUnitV2]:
+                    return null;
 
-            return frameworks[0] == TestFramework.XUnitV2 ? null : frameworks[0];
+                case [var only]:
+                    return only;
+
+                default:
+                    Error(PreflightCode.MultipleTestFrameworks,
+                        $"'{project.Path}' references more than one test framework ({string.Join(", ", frameworks)}), so the rules cannot pick one.",
+                        "Keep one test framework per test application, then rerun.");
+                    return null;
+            }
         }
 
         // MSTest.Sdk turns MTP on unless UseVSTest=true; package-based MSTest turns it on with EnableMSTestRunner=true.
@@ -322,16 +326,19 @@ public static class CompatibilityPreflight
                 }
 
                 if (!TryResolve(package, out PackageVersion? version)
-                    || variant == ".mtp-v2"
-                    || (variant.Length == 0 && version >= rules.XUnitV3DefaultsToMtpV2))
+                    || variant is ".mtp-v2"
+                    || (variant is "" && version >= rules.XUnitV3DefaultsToMtpV2))
                 {
                     continue;
                 }
 
                 PackageVersion target = version >= rules.XUnitV3MtpV2Variant ? version : rules.XUnitV3UpgradeTo;
-                string current = variant.Length == 0 ? $"defaults to Microsoft.Testing.Platform v1 before {rules.XUnitV3DefaultsToMtpV2}"
-                    : variant == ".mtp-off" ? "turns Microsoft.Testing.Platform off"
-                    : "selects Microsoft.Testing.Platform v1";
+                string current = variant switch
+                {
+                    "" => $"defaults to Microsoft.Testing.Platform v1 before {rules.XUnitV3DefaultsToMtpV2}",
+                    ".mtp-off" => "turns Microsoft.Testing.Platform off",
+                    _ => "selects Microsoft.Testing.Platform v1",
+                };
                 string upgrade = target == version ? "same version" : $"{rules.XUnitV3MtpV2Variant} is the first version with the .mtp-v2 variant";
                 Plan(package, PackageChangeKind.Replace, baseName + ".mtp-v2", target,
                     $"{package.Name} {package.Version} {current}; {baseName}.mtp-v2 is the same xUnit v3 on Microsoft.Testing.Platform v2 ({upgrade}).");
@@ -350,22 +357,19 @@ public static class CompatibilityPreflight
         {
             foreach (PackageReferenceState package in _packages)
             {
-                if (rules.FindPackage(package.Name) is not { } rule)
+                switch (rules.FindPackage(package.Name))
                 {
-                    continue;
-                }
+                    case { Kind: PackageRuleKind.Extension } rule:
+                        ApplyRule(package, rule, sdkUpgrade: _changes.Any(c => c.Kind == PackageChangeKind.SdkUpgrade));
+                        break;
 
-                if (rule.Kind == PackageRuleKind.Extension)
-                {
-                    ApplyRule(package, rule, sdkUpgrade: _changes.Any(c => c.Kind == PackageChangeKind.SdkUpgrade));
-                }
-                else if (rule.Kind == PackageRuleKind.VsTestOnly)
-                {
-                    _diagnostics.Add(PreflightDiagnostic.Warning(PreflightCode.VsTestOnlyPackage,
-                        $"{package.Name} {package.Version} in '{project.Path}' only works with VSTest and does nothing under Microsoft.Testing.Platform. {rule.Evidence}",
-                        "Plan its replacement with the migration so its output (for example coverage) is not lost.",
-                        project.Path,
-                        package.Definition.Location));
+                    case { Kind: PackageRuleKind.VsTestOnly } rule:
+                        _diagnostics.Add(PreflightDiagnostic.Warning(PreflightCode.VsTestOnlyPackage,
+                            $"{package.Name} {package.Version} in '{project.Path}' only works with VSTest and does nothing under Microsoft.Testing.Platform. {rule.Evidence}",
+                            "Plan its replacement with the migration so its output (for example coverage) is not lost.",
+                            project.Path,
+                            package.Definition.Location));
+                        break;
                 }
             }
         }

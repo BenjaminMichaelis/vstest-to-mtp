@@ -387,7 +387,7 @@ internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<str
                 // and has no position of its own, so the position is the attribute or element it was made from.
                 string[] reference = element.Sdk.Split('/', 2, StringSplitOptions.TrimEntries);
                 string? declared = element.Version is { Length: > 0 } version ? version
-                    : reference.Length == 2 && reference[1].Length > 0 ? reference[1]
+                    : reference is [_, { Length: > 0 } inline] ? inline
                     : null;
                 if (declared?.StartsWith("min=", StringComparison.OrdinalIgnoreCase) == true)
                 {

@@ -143,17 +143,17 @@ public sealed class PackageVersion : IComparable<PackageVersion>, IEquatable<Pac
     {
         version = null;
         string text = value?.Trim() ?? string.Empty;
-        if (text.Length == 0 || text.Contains('*', StringComparison.Ordinal))
+        if (text is "" || text.Contains('*', StringComparison.Ordinal))
         {
             return false;
         }
 
-        if (text[0] != '[' && text[0] != '(')
+        if (text is not ['[' or '(', ..])
         {
             return TryParse(text, out version);
         }
 
-        if (text[0] == '(' || (text[^1] != ']' && text[^1] != ')'))
+        if (text is not ['[', .., ']' or ')'])
         {
             return false;
         }
@@ -162,7 +162,7 @@ public sealed class PackageVersion : IComparable<PackageVersion>, IEquatable<Pac
         int comma = inner.IndexOf(',', StringComparison.Ordinal);
 
         // "[1.2.3]" is exact, so it must close with ']'; "[1.2.3,...)" starts at 1.2.3 whatever the upper bound is.
-        if (comma < 0 && text[^1] != ']')
+        if (comma < 0 && text is not [.., ']'])
         {
             return false;
         }

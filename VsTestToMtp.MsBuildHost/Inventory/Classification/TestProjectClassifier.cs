@@ -141,8 +141,8 @@ internal static class TestProjectClassifier
     /// </summary>
     private static bool IsFromProjectSdk(PackageReferenceState package, EvaluatedProject evaluated) =>
         !package.Definition.IsRepositoryFile
-        && package.Definition.ImportChain.Count > 0
-        && package.Definition.ImportChain[0].ImportedBy.File == evaluated.Path
+        && package.Definition.ImportChain is [var first, ..]
+        && first.ImportedBy.File == evaluated.Path
         && package.Definition.ImportChain.All(step =>
             step.ImportedBy.File == evaluated.Path || !evaluated.Imports.Any(i => i.File == step.ImportedBy.File));
 
