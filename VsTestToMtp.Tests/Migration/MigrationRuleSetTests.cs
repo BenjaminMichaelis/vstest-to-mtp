@@ -1,106 +1,51 @@
 namespace VsTestToMtp.Tests.Migration;
 
-using VsTestToMtp.Inventory;
 using VsTestToMtp.Migration;
 
-/// <summary>Pins the rule matrix, so a change to a threshold or upgrade target is a deliberate, reviewed change with a new rule set version.</summary>
+/// <summary>
+/// Invariants the rule matrix must keep whatever its numbers are. What each threshold means for a project (below it is upgraded, at it
+/// nothing changes, xUnit v2 and NUnit 2 are blocked, ...) is tested against evaluated projects in <see cref="PreflightScenarioTests"/>.
+/// </summary>
 public class MigrationRuleSetTests
 {
     private static readonly MigrationRuleSet Rules = MigrationRuleSet.Current;
 
     [Test]
-    public async Task RuleSet_IsIdentifiedAndVersioned()
-    {
-        await Assert.That(Rules.Id).IsEqualTo("mtp-v2-dotnet10");
-        await Assert.That(Rules.Version).IsEqualTo(1);
-        await Assert.That(Rules.MinimumSdkVersion).IsEqualTo(PackageVersion.Parse("10.0.100"));
-    }
-
-    [Test]
-    public async Task RuntimeTargets_AreNet8AndNetFramework462()
-    {
-        await Assert.That(Rules.RuntimeTargets.Select(t => (t.Identifier, t.MinimumVersion.ToString(), t.Moniker)))
-            .IsEquivalentTo([(".NETCoreApp", "8.0", "net8.0"), (".NETFramework", "4.6.2", "net462")]);
-    }
-
-    [Test]
-    public async Task XUnitV3_NeedsNetFramework472()
-    {
-        IReadOnlyList<RuntimeTarget> targets = Rules.RuntimeTargetsFor(TestFramework.XUnitV3);
-
-        await Assert.That(targets.Single(t => t.Identifier == ".NETFramework").Moniker).IsEqualTo("net472");
-        await Assert.That(targets.Single(t => t.Identifier == ".NETCoreApp").Moniker).IsEqualTo("net8.0");
-        await Assert.That(Rules.RuntimeTargetsFor(TestFramework.MSTest).Single(t => t.Identifier == ".NETFramework").Moniker).IsEqualTo("net462");
-    }
-
-    [Test]
-    [Arguments("MSTest", "4.0.0", "4.0.2")]
-    [Arguments("MSTest.TestAdapter", "4.0.0", "4.0.2")]
-    [Arguments("MSTest.TestFramework", "4.0.0", "4.0.2")]
-    [Arguments("MSTest.Sdk", "4.0.0", "4.0.2")]
-    [Arguments("NUnit3TestAdapter", "6.0.0", "6.3.1")]
-    [Arguments("TUnit", "0.71.0", "1.45.0")]
-    [Arguments("TUnit.Engine", "0.71.0", "1.45.0")]
-    [Arguments("Microsoft.Testing.Platform", "2.0.0", "2.5.1")]
-    [Arguments("Microsoft.Testing.Extensions.TrxReport", "2.0.0", "2.5.1")]
-    [Arguments("Microsoft.Testing.Extensions.CodeCoverage", "18.1.0", "18.8.0")]
-    public async Task FrameworkAndExtensionPackages_HaveAnMtpV2ThresholdAndATestedUpgrade(string package, string minimum, string upgradeTo)
-    {
-        PackageRule? rule = Rules.FindPackage(package.ToLowerInvariant());
-
-        await Assert.That(rule).IsNotNull();
-        await Assert.That(rule!.MinimumVersion!.ToString()).IsEqualTo(minimum);
-        await Assert.That(rule.UpgradeTo!.ToString()).IsEqualTo(upgradeTo);
-    }
-
-    [Test]
-    public async Task EveryUpgradeTarget_SatisfiesItsOwnThreshold_AndStaysOnARelease()
+    public async Task EveryUpgradeTarget_IsAReleaseThatSatisfiesItsOwnThreshold()
     {
         foreach (PackageRule rule in Rules.Packages.Where(r => r.UpgradeTo is not null))
         {
             await Assert.That(rule.UpgradeTo! >= rule.MinimumVersion!).IsTrue().Because(rule.Package);
             await Assert.That(rule.UpgradeTo!.IsPrerelease).IsFalse().Because(rule.Package);
         }
-    }
 
-    [Test]
-    public async Task NUnitBelow3_IsBlockedNotUpgraded()
-    {
-        PackageRule nunit = Rules.FindPackage("NUnit")!;
-
-        await Assert.That(nunit.MinimumVersion!.ToString()).IsEqualTo("3.0.0");
-        await Assert.That(nunit.UpgradeTo).IsNull();
-    }
-
-    [Test]
-    public async Task XUnitV2Packages_HaveNoRule_SoTheyAreNeverUpgradedToV3()
-    {
-        await Assert.That(Rules.FindPackage("xunit")).IsNull();
-        await Assert.That(Rules.FindPackage("xunit.core")).IsNull();
-        await Assert.That(Rules.Packages.Any(r => r.Framework == TestFramework.XUnitV2)).IsFalse();
-    }
-
-    [Test]
-    public async Task XUnitV3Variants_DefaultToMtpV2From4_AndHaveAnMtpV2VariantFrom3_2()
-    {
-        await Assert.That(Rules.XUnitV3Packages).IsEquivalentTo(["xunit.v3", "xunit.v3.core"]);
-        await Assert.That(Rules.XUnitV3DefaultsToMtpV2.ToString()).IsEqualTo("4.0.0");
-        await Assert.That(Rules.XUnitV3MtpV2Variant.ToString()).IsEqualTo("3.2.0");
         await Assert.That(Rules.XUnitV3UpgradeTo >= Rules.XUnitV3MtpV2Variant).IsTrue();
+        await Assert.That(Rules.XUnitV3UpgradeTo.IsPrerelease).IsFalse();
+    }
+
+    // Packages that ship together must be moved together: a mismatched MSTest adapter and framework, or TUnit engine and core, do not
+    // load. The platform's extensions are versioned with the platform.
+    [Test]
+    [Arguments("MSTest", "MSTest.TestAdapter", "MSTest.TestFramework", "MSTest.Analyzers")]
+    [Arguments("TUnit", "TUnit.Engine", "TUnit.Core", "TUnit.Assertions")]
+    [Arguments("Microsoft.Testing.Platform", "Microsoft.Testing.Platform.MSBuild", "Microsoft.Testing.Extensions.TrxReport", "Microsoft.Testing.Extensions.Retry")]
+    public async Task PackagesVersionedTogether_ShareTheirThresholdAndUpgradeTarget(string first, string second, string third, string fourth)
+    {
+        PackageRule[] family = [.. new[] { first, second, third, fourth }.Select(p => Rules.FindPackage(p)!)];
+
+        await Assert.That(family.Select(r => r.MinimumVersion).Distinct()).HasSingleItem();
+        await Assert.That(family.Select(r => r.UpgradeTo).Distinct()).HasSingleItem();
     }
 
     [Test]
-    public async Task VsTestOnlyPackages_AreFlaggedWithoutAThreshold()
+    public async Task EveryRule_SaysWhereItsThresholdComesFrom()
     {
-        PackageRule[] vstestOnly = [.. Rules.Packages.Where(r => r.Kind == PackageRuleKind.VsTestOnly)];
-
-        await Assert.That(vstestOnly.Select(r => r.Package)).IsEquivalentTo(["coverlet.collector", "coverlet.msbuild"]);
-        await Assert.That(vstestOnly.All(r => r.MinimumVersion is null && r.UpgradeTo is null)).IsTrue();
+        await Assert.That(Rules.Packages.Where(r => string.IsNullOrWhiteSpace(r.Evidence)).Select(r => r.Package)).IsEmpty();
     }
 
     [Test]
-    public async Task EveryRule_SaysWhyItsThresholdIsWhatItIs()
+    public async Task PackageLookup_IsCaseInsensitiveLikeNuGet()
     {
-        await Assert.That(Rules.Packages.All(r => r.Evidence.Length > 0)).IsTrue();
+        await Assert.That(Rules.FindPackage("nunit3testadapter")).IsSameReferenceAs(Rules.FindPackage("NUnit3TestAdapter"));
     }
 }
