@@ -24,6 +24,9 @@ public class PreflightScenarioTests
 
     private const string XUnitV2 = "Microsoft.NET.Test.Sdk:17.14.1,xunit:2.9.3,xunit.runner.visualstudio:3.1.4";
 
+    // A framework package without a runner does not make a test application by itself; the project says it is one.
+    private const string TestProject = "<PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup>";
+
     private static readonly MigrationRuleSet Rules = MigrationRuleSet.Current;
 
     [Test]
@@ -209,16 +212,76 @@ public class PreflightScenarioTests
             [PreflightCode.MissingRunnerPackage, PreflightCode.UnsupportedTestFramework, PreflightCode.UnsupportedTestFramework]);
     }
 
+    // The adapter belongs to the framework's own family, so a project without one gets it added next to the framework package.
     [Test]
-    public async Task MSTestWithoutAnAdapter_IsBlocked()
+    public async Task NUnitWithoutItsAdapter_GetsTheAdapterAdded()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject(App, TestProject + References("NUnit:4.3.2"));
+
+        ProjectPreflight project = Assess(workspace);
+
+        await Assert.That(project.Readiness).IsEqualTo(MigrationReadiness.Eligible);
+        await Assert.That(project.Diagnostics).IsEmpty();
+        PackageChange change = project.PackageChanges.Single();
+        await Assert.That((change.Kind, change.Package, change.FromVersion, change.ToPackage, change.ToVersion))
+            .IsEqualTo((PackageChangeKind.Add, "NUnit3TestAdapter", (string?)null, "NUnit3TestAdapter", Rules.FindPackage("NUnit3TestAdapter")!.UpgradeTo!.ToNormalizedString()));
+        await Assert.That(change.Reference).IsEqualTo(new SourceLocation(App, workspace.LineOf(App, "Include=\"NUnit\""), 5));
+        await Assert.That(change.VersionLocation).IsNull();
+    }
+
+    [Test]
+    public async Task UnderCentralPackageManagement_AnAddedAdapterNeedsACentralVersionToo()
     {
         using ScenarioWorkspace workspace = new ScenarioWorkspace()
-            .WriteProject(App, "<PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup>" + References("MSTest.TestFramework:4.0.2"));
+            .Write("Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="NUnit" Version="4.3.2" />
+                  </ItemGroup>
+                </Project>
+                """)
+            .WriteProject(App, TestProject + ScenarioWorkspace.PackageReferences(new PackageRef("NUnit")));
+
+        PackageChange change = Assess(workspace).PackageChanges.Single();
+
+        await Assert.That(change.Kind).IsEqualTo(PackageChangeKind.Add);
+        await Assert.That(change.VersionLocation).IsEqualTo(SourceLocation.OfFile("Directory.Packages.props"));
+    }
+
+    [Test]
+    [Arguments("NUnit:2.6.4")]
+    [Arguments("NUnit:4.3.2,NUnit.Console:3.18.3")]
+    public async Task NUnitWhereAddingTheAdapterWouldChangeHowTestsRun_IsBlockedInstead(string packages)
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject(App, TestProject + References(packages));
 
         ProjectPreflight project = Assess(workspace);
 
         await Assert.That(project.Readiness).IsEqualTo(MigrationReadiness.Blocked);
-        await Assert.That(Codes(project)).IsEquivalentTo([PreflightCode.MissingRunnerPackage]);
+        await Assert.That(project.PackageChanges).IsEmpty();
+        await Assert.That(Codes(project)).Contains(PreflightCode.MissingRunnerPackage);
+    }
+
+    [Test]
+    [Arguments("MSTest.TestFramework:4.0.2", "4.0.2")]
+    [Arguments("MSTest.TestFramework:3.6.4", null)]
+    public async Task MSTestFrameworkWithoutItsAdapter_GetsTheAdapterAtTheFrameworksVersion_OrTheTestedOne(string packages, string? version)
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace()
+            .WriteProject(App, TestProject + References(packages));
+
+        ProjectPreflight project = Assess(workspace);
+
+        PackageChange adapter = project.PackageChanges.Single(c => c.Kind == PackageChangeKind.Add);
+        await Assert.That(project.Readiness).IsEqualTo(MigrationReadiness.Eligible);
+        await Assert.That((adapter.Package, adapter.ToVersion))
+            .IsEqualTo(("MSTest.TestAdapter", version ?? Rules.FindPackage("MSTest.TestAdapter")!.UpgradeTo!.ToNormalizedString()));
+
+        // Below 4.0 the framework package is upgraded to the same version the adapter is added at, so the two stay together.
+        await Assert.That(project.PackageChanges.Select(c => c.ToVersion).Distinct()).HasSingleItem();
     }
 
     [Test]

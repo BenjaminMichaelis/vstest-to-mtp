@@ -67,7 +67,7 @@ public class PreflightFixtureTests
         TargetFrameworkState inventory = FixtureInventory.Of(fixture).Projects.Single(p => p.Path == FixtureInventory.TestProject).TargetFrameworks.Single();
         string VersionOf(string package) => inventory.Packages.Single(p => p.Name == package).Version!;
 
-        (PackageChangeKind, string, string, string, string)[] expected = fixture.Framework switch
+        (PackageChangeKind, string, string?, string, string)[] expected = fixture.Framework switch
         {
             "nunit" => [(PackageChangeKind.Upgrade, "NUnit3TestAdapter", VersionOf("NUnit3TestAdapter"), "NUnit3TestAdapter", Rules.FindPackage("NUnit3TestAdapter")!.UpgradeTo!.ToNormalizedString())],
 

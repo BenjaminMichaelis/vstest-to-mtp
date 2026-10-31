@@ -202,6 +202,32 @@ internal sealed class ProjectAssessment
             package.VersionDefinition?.Location));
     }
 
+    /// <summary>
+    /// Plans adding <paramref name="package"/>, a package of the framework's own family the project lacks, next to the framework package
+    /// <paramref name="sibling"/> (and under Central Package Management, with a <c>PackageVersion</c> beside the sibling's). Returns false,
+    /// planning nothing, when there is nowhere in the repository to put it: the sibling is not declared in the project file itself.
+    /// </summary>
+    public bool PlanAddition(string package, PackageReferenceState sibling, NuGetVersion version, string reason)
+    {
+        if (!sibling.Definition.IsFromProjectFile)
+        {
+            return false;
+        }
+
+        _changes.Add(new PackageChange(
+            PackageChangeKind.Add,
+            package,
+            FromVersion: null,
+            package,
+            version.ToNormalizedString(),
+            reason,
+            sibling.Definition.Location,
+            sibling.VersionSource == PackageVersionSource.Central && sibling.VersionDefinition is { IsRepositoryFile: true } central
+                ? SourceLocation.OfFile(central.Location.File)
+                : null));
+        return true;
+    }
+
     /// <summary>Adds a change the framework rules worked out themselves (an SDK reference rather than a package reference).</summary>
     public void Plan(PackageChange change) => _changes.Add(change);
 

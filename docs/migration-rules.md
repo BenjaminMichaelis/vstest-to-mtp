@@ -59,11 +59,22 @@ runs MTP).
 | `coverlet.MTP` | 8.0.0 (every release is on MTP v2) | 8.0.0 |
 | `coverlet.collector`, `coverlet.msbuild` | never: a VSTest data collector, and a hook on the `VSTest` target | **Warning**, not blocking: replacing them is part of the migration ([#13](https://github.com/BenjaminMichaelis/vstest-to-mtp/issues/13)) so coverage is not lost |
 
+## What is added
+
+A project that has a framework package but not the adapter that runs it on MTP (`NUnit` without `NUnit3TestAdapter`, `MSTest.TestFramework`
+without `MSTest.TestAdapter`) gets a `PackageChangeKind.Add` change: the adapter is part of the framework's own family, so adding it is no
+framework migration. The adapter is added at the tested version (for MSTest, at the framework's version when that already runs on MTP v2),
+`Reference` is the framework package's reference to insert next to, and `VersionLocation` is `Directory.Packages.props` under Central Package
+Management (a `PackageVersion` is needed too) or null when the version is written on the new reference. It stays an error when adding would
+change how the tests run (another NUnit runner, `NUnit.Console`, is referenced), when it would be a framework migration (NUnit 2), or when the
+framework package is not declared in the project file itself.
+
 ## What blocks
 
 Every one of these is an error diagnostic with a location and a remediation; none is rewritten silently:
 
-- `XUnitV2NotSupported`, `UnsupportedTestFramework` (no supported framework, NUnit 2), `MultipleTestFrameworks`, `MissingRunnerPackage`.
+- `XUnitV2NotSupported`, `UnsupportedTestFramework` (no supported framework, NUnit 2), `MultipleTestFrameworks`.
+- `MissingRunnerPackage`: only when the missing adapter cannot be added safely (see below).
 - `UnsupportedTargetFramework`: any target framework below the runtime targets, per target framework. Projects are never retargeted.
 - `CustomEntryPoint`: `StartupObject`, `GenerateProgramFile=false` or `GenerateTestingPlatformEntryPoint=false` on a project that still has
   to move (MTP generates the entry point). A project already on MTP v2 keeps its own.

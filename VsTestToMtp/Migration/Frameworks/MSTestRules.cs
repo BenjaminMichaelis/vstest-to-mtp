@@ -24,15 +24,29 @@ internal static class MSTestRules
         bool hasAdapter = project.PackagesNamed("MSTest", "MSTest.TestAdapter").Any();
         if (!hasAdapter)
         {
-            project.Error(PreflightCode.MissingRunnerPackage,
-                $"'{project.Project.Path}' references MSTest without MSTest.TestAdapter (or the MSTest package), so nothing runs its tests.",
-                "Reference MSTest (or MSTest.TestAdapter), then rerun.");
+            AddAdapter(project);
         }
 
         bool below = project.ApplyFamilyRules(TestFramework.MSTest, sdkUpgradePlanned: false);
         return new FrameworkVerdict(
             IsOnMtpV2: hasAdapter && project.AllTrue(MsBuildPropertyNames.EnableMSTestRunner) && !below,
             SdkUpgradePlanned: false);
+    }
+
+    // MSTest.TestAdapter is part of MSTest's own family and versioned with the framework, so adding it is no framework migration.
+    private static void AddAdapter(ProjectAssessment project)
+    {
+        PackageRule adapter = project.Rules.FindPackage("MSTest.TestAdapter")!;
+        PackageReferenceState? framework = project.PackagesNamed("MSTest.TestFramework").FirstOrDefault();
+        if (framework is null
+            || !project.TryResolve(framework, out NuGetVersion? version)
+            || !project.PlanAddition(adapter.Package, framework, version >= adapter.MinimumVersion ? version : adapter.UpgradeTo!,
+                $"MSTest tests run on Microsoft.Testing.Platform through {adapter.Package}, which the project does not reference, and it is versioned with MSTest.TestFramework. {adapter.Evidence}"))
+        {
+            project.Error(PreflightCode.MissingRunnerPackage,
+                $"'{project.Project.Path}' references MSTest without MSTest.TestAdapter (or the MSTest package), so nothing runs its tests, and it is not clear where to add it.",
+                "Reference MSTest (or MSTest.TestAdapter) in the project, then rerun.");
+        }
     }
 
     /// <summary>Plans an MSTest.Sdk upgrade when it is on MTP v1; returns whether one was planned.</summary>
