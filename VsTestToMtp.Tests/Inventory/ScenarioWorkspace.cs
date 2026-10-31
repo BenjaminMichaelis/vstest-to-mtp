@@ -1,5 +1,7 @@
 namespace VsTestToMtp.Tests.Inventory;
 
+using System.IO.Compression;
+
 using VsTestToMtp.Inventory;
 using VsTestToMtp.Tests.Fixtures;
 
@@ -99,6 +101,38 @@ public sealed class ScenarioWorkspace : IDisposable
             {references}
               </ItemGroup>
             """;
+    }
+
+    /// <summary>
+    /// Writes a minimal MSBuild SDK package (<c>Sdk/Sdk.props</c> and <c>Sdk/Sdk.targets</c>) to <paramref name="feed"/>, so a
+    /// versioned <c>Sdk="Id/Version"</c> resolves through MSBuild's NuGet SDK resolver from a local feed.
+    /// </summary>
+    public static void WriteSdkPackage(string feed, string id, string version, string props, string targets = "<Project />")
+    {
+        Directory.CreateDirectory(feed);
+        using ZipArchive package = ZipFile.Open(Path.Combine(feed, $"{id.ToLowerInvariant()}.{version}.nupkg"), ZipArchiveMode.Create);
+        Add($"{id}.nuspec", $"""
+            <?xml version="1.0"?>
+            <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+              <metadata>
+                <id>{id}</id>
+                <version>{version}</version>
+                <authors>tests</authors>
+                <description>Test SDK</description>
+                <packageTypes>
+                  <packageType name="MSBuildSdk" />
+                </packageTypes>
+              </metadata>
+            </package>
+            """);
+        Add("Sdk/Sdk.props", props);
+        Add("Sdk/Sdk.targets", targets);
+
+        void Add(string entryName, string content)
+        {
+            using StreamWriter writer = new(package.CreateEntry(entryName).Open());
+            writer.Write(content);
+        }
     }
 
     public void Dispose()

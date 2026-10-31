@@ -32,6 +32,10 @@ questions MSBuild behavior, add the verified answer here and pin it with a test.
   cannot replace that walker.
 - Which files are the repository's: the .NET root comes from the SDK's `$(NetCoreRoot)`, and every package an SDK was resolved from
   (`ResolvedImport.SdkResult`) is external, wherever NuGet.config put it (`FilesFromAVersionedSdkPackage_...` restores one from a local feed).
+- An implicit SDK import (`<Project Sdk="MSTest.Sdk/3.11.0">`) is a `ProjectImportElement` whose `Sdk` is the whole reference
+  (`MSTest.Sdk/3.11.0`, so `Version` is empty) and whose location is `(0,0)`; `ProjectRootElement.SdkLocation` (or the `<Sdk>` element) is
+  where it is written. `ResolvedImport.SdkResult.Version` is the version the resolver picked, also when it comes from `global.json`
+  `msbuild-sdks`. `MSTestSdk_IsRecognisedFromItsEvaluatedState` pins both forms (`ProjectInventory.Sdks`).
 - A bare condition on an unset property (`Condition="$(X)"`) is rejected by MSBuild itself (MSB4113), so it surfaces as `EvaluationFailed`.
 - A file imported twice is not an ignored import and does not fail evaluation.
 - A locked or access-denied project file is reported by MSBuild as `InvalidProjectFileException`, not `IOException`.
@@ -114,4 +118,6 @@ When adding a check, decide which of these it falls under; most review findings 
   run alongside other in-process NuGet/MSBuild work. Evaluating in a worker process (#26) would remove the problem.
 - One MSBuild/SDK per process (see above). Inventorying repositories that pin different SDKs needs one process per SDK.
 - Package-contributed properties (from `obj/*.nuget.g.props`) are deliberately not seen; package evidence comes from `TestPackageCatalog`.
+  Packages declared by the project's own SDK (`Sdk="MSTest.Sdk/..."`, reached from the project file through SDK files only) count as the
+  project's own test evidence; packages from a shared repository file such as `Directory.Build.props` still do not.
 - Condition analysis follows property references in conditions; it does not evaluate conditions itself.
