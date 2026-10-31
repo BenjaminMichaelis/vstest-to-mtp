@@ -12,8 +12,14 @@ public enum PreflightCode
     /// <summary>The project could not be classified, or its target frameworks classify differently.</summary>
     UnclassifiedProject,
 
-    /// <summary>The .NET SDK is older than the rule set requires.</summary>
+    /// <summary>The .NET SDK is older than the rule set requires, or which SDK evaluated a test application could not be determined.</summary>
     UnsupportedSdk,
+
+    /// <summary>
+    /// <c>global.json</c> does not select the MTP mode of <c>dotnet test</c> (<c>test.runner</c>) for test applications that run, or will run,
+    /// on Microsoft.Testing.Platform v2. A warning: selecting it is part of the migration.
+    /// </summary>
+    TestRunnerNotSelected,
 
     /// <summary>The selection would mix VSTest and Microsoft.Testing.Platform test applications in one <c>dotnet test</c> run configuration.</summary>
     MixedTestRunners,
@@ -38,6 +44,12 @@ public enum PreflightCode
 
     /// <summary>A package or SDK that needs to change is declared outside the repository (by an SDK or another package), so it cannot be edited.</summary>
     PackageNotInRepository,
+
+    /// <summary>
+    /// A package MSTest.Sdk declares takes its version from an MSTest.Sdk property (<c>MSTestVersion</c>, ...) that the repository sets
+    /// below what Microsoft.Testing.Platform v2 needs; the property is what has to change.
+    /// </summary>
+    SdkPackageVersionPinned,
 
     /// <summary>A test framework is present but no runner/adapter package that runs it on Microsoft.Testing.Platform is.</summary>
     MissingRunnerPackage,

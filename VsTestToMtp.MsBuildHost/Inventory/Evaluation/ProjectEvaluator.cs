@@ -13,34 +13,8 @@ namespace VsTestToMtp.Inventory;
 /// </summary>
 internal sealed class ProjectEvaluator(PathFormatter formatter, IReadOnlySet<string> selectedProjects) : IDisposable
 {
-    // Besides classification, the migration preflight reads the runtime target (TargetFrameworkIdentifier/Version), the SDK
-    // (NETCoreSdkVersion), MSTest.Sdk's state (UsingMSTestSdk, UseVSTest, MicrosoftTestingPlatformVersion, MSTestVersion) and
-    // custom entry points (StartupObject, GenerateProgramFile, GenerateTestingPlatformEntryPoint) from here.
-    internal static readonly string[] RelevantProperties =
-    [
-        "CentralPackageVersionOverrideEnabled",
-        "EnableMSTestRunner",
-        "EnableNUnitRunner",
-        "EnableTUnitRunner",
-        "GenerateProgramFile",
-        "GenerateTestingPlatformEntryPoint",
-        "IsPackable",
-        "IsTestProject",
-        "ManagePackageVersionsCentrally",
-        "MicrosoftTestingPlatformVersion",
-        "MSTestVersion",
-        "NETCoreSdkVersion",
-        "OutputType",
-        "StartupObject",
-        "TargetFramework",
-        "TargetFrameworkIdentifier",
-        "TargetFrameworks",
-        "TargetFrameworkVersion",
-        "TestingPlatformDotnetTestSupport",
-        "UseMicrosoftTestingPlatformRunner",
-        "UseVSTest",
-        "UsingMSTestSdk",
-    ];
+    // The properties captured for every target framework; MsBuildPropertyNames says who reads them.
+    internal static IReadOnlyList<string> RelevantProperties => MsBuildPropertyNames.Captured;
 
     private readonly ProjectBlockerDetector _blockerDetector = new(formatter);
 

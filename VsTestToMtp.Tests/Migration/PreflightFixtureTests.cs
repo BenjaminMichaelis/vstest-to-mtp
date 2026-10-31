@@ -69,7 +69,7 @@ public class PreflightFixtureTests
 
         (PackageChangeKind, string, string, string, string)[] expected = fixture.Framework switch
         {
-            "nunit" => [(PackageChangeKind.Upgrade, "NUnit3TestAdapter", VersionOf("NUnit3TestAdapter"), "NUnit3TestAdapter", Rules.FindPackage("NUnit3TestAdapter")!.UpgradeTo!.ToString())],
+            "nunit" => [(PackageChangeKind.Upgrade, "NUnit3TestAdapter", VersionOf("NUnit3TestAdapter"), "NUnit3TestAdapter", Rules.FindPackage("NUnit3TestAdapter")!.UpgradeTo!.ToNormalizedString())],
 
             // Still xUnit v3, at the same version: only the MTP variant changes.
             "xunit-v3" => [(PackageChangeKind.Replace, "xunit.v3.mtp-off", VersionOf("xunit.v3.mtp-off"), "xunit.v3.mtp-v2", VersionOf("xunit.v3.mtp-off"))],

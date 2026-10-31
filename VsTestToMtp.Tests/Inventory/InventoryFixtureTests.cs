@@ -123,6 +123,19 @@ public class InventoryFixtureTests
         await Assert.That(tests.Imports.All(i => i.IsImplicit && i.IsRepositoryFile)).IsTrue();
     }
 
+    // The migration preflight decides on these; a project that did not report them would be blocked instead of assessed.
+    [Test]
+    [MethodDataSource(typeof(FixtureDataSources), nameof(FixtureDataSources.All))]
+    public async Task Inventory_ReportsTheSdkAndRuntimeTargetOfEveryTargetFramework(FixtureInfo fixture)
+    {
+        foreach (TargetFrameworkState state in Inventory(fixture).Projects.SelectMany(p => p.TargetFrameworks))
+        {
+            await Assert.That(state.GetProperty(MsBuildPropertyNames.NETCoreSdkVersion)?.Value).StartsWith("10.");
+            await Assert.That(state.GetProperty(MsBuildPropertyNames.TargetFrameworkIdentifier)?.Value).IsEqualTo(".NETCoreApp");
+            await Assert.That(state.GetProperty(MsBuildPropertyNames.TargetFrameworkVersion)?.Value).IsEqualTo("v10.0");
+        }
+    }
+
     [Test]
     [MethodDataSource(typeof(FixtureDataSources), nameof(FixtureDataSources.All))]
     public async Task Inventory_ReadsGlobalJsonInVsTestMode(FixtureInfo fixture)

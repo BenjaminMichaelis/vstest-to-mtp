@@ -6,5 +6,8 @@ namespace VsTestToMtp.Inventory;
 /// </summary>
 public sealed record SourceLocation(string File, int Line, int Column)
 {
+    /// <summary>A whole file (no line or column), for a finding about the file as such, such as a project or global.json.</summary>
+    public static SourceLocation OfFile(string file) => new(file, 0, 0);
+
     public override string ToString() => $"{File}({Line},{Column})";
 }

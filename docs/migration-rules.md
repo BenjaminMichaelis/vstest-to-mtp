@@ -7,8 +7,9 @@ package references and where they are declared); project and file names never de
 `MigrationRuleSet`, and nothing is looked up on a feed.
 
 The rules are versioned (`MigrationRuleSet.Id` = `mtp-v2-dotnet10`, `MigrationRuleSet.Version` = `1`) and every `PreflightResult` records
-the rule set it was made with. Bump the version whenever a threshold, upgrade target or rule changes; `MigrationRuleSetTests` pins the
-matrix so such a change is deliberate.
+the rule set it was made with. Bump the version whenever a verdict can change: a threshold, upgrade target or runtime target in the matrix, and equally a rule in
+`CompatibilityPreflight` or the per-framework rules (`MSTestRules`, `NUnitRules`, `XUnitV3Rules`, `TUnitRules`). Versions are read with
+NuGet.Versioning (`PackageVersions.TryResolveMinimum` only accepts what NuGet resolves without a feed).
 
 ## Verdicts
 
@@ -41,7 +42,7 @@ Selection-level diagnostics (no `Project`) apply to the whole run configuration.
 | `MSTest.Sdk` | 4.0.0 (sets `MicrosoftTestingPlatformVersion` 2.0.0; 3.11 sets 1.9.0). MTP is on unless `UseVSTest=true`. | Upgrade the SDK version where it is written: the `Sdk` reference, or `global.json` `msbuild-sdks` | 4.0.2 |
 | NUnit (`NUnit3TestAdapter`) | 6.0.0 (depends on `Microsoft.Testing.Platform.MSBuild` 2.0.2; 5.2.0 on 1.9.0) | Upgrade | 6.3.1 |
 | NUnit framework (`NUnit`) | 3.0.0 | **Blocked**: NUnit3TestAdapter does not run NUnit 2, and moving to NUnit 3 is a framework migration. The NUnit 2 adapter (`NUnitTestAdapter`) is blocked too. | none |
-| xUnit v3 (`xunit.v3`, `xunit.v3.core`, each with `.mtp-v1`, `.mtp-v2`, `.mtp-off` or no suffix) | the `.mtp-v2` variant (3.2.0 and later), or no suffix from 4.0.0 ([xUnit v3 and MTP](https://xunit.net/docs/getting-started/v3/microsoft-testing-platform)) | Replace with the `.mtp-v2` variant at the same version, or at 3.2.2 when older than 3.2.0. Still xUnit v3 either way. | 3.2.2 (only below 3.2.0) |
+| xUnit v3 (`xunit.v3`, `xunit.v3.core`, each with `.mtp-v1`, `.mtp-v2`, `.mtp-off` or no suffix) | the `.mtp-v2` variant (3.2.0 and later), or no suffix from 4.0.0 ([xUnit v3 and MTP](https://xunit.net/docs/getting-started/v3/microsoft-testing-platform)) | Replace with the `.mtp-v2` variant at the same version, or at 3.2.2 when older than 3.2.0. Still xUnit v3 either way. Other `xunit.v3.*` packages the project references (`xunit.v3.assert`, ...) move to the same version, because xUnit v3 packages require each other at exactly one version. | 3.2.2 (only below 3.2.0) |
 | xUnit v2 (`xunit`, `xunit.core`) | never | **Blocked**: never upgraded to xUnit v3 | none |
 | TUnit (`TUnit`, `TUnit.Engine`, `TUnit.Core`, `TUnit.Assertions`) | 0.71.0 (`TUnit.Engine` 0.71.0 depends on `Microsoft.Testing.Platform` 2.0.1; 0.70.7 on 1.9.0) | Upgrade, all packages of the family | 1.45.0 |
 
@@ -69,9 +70,12 @@ Every one of these is an error diagnostic with a location and a remediation; non
 - `UnresolvableVersion`: a version only a feed can resolve (floating `4.*`, an exclusive or missing lower bound) or none at all. A bare
   version and an inclusive range resolve to their lower bound, as NuGet does.
 - `PackageNotInRepository`: a package that needs to change is declared by an SDK or package, not a repository file.
+- `SdkPackageVersionPinned`: MSTest.Sdk declares a package with the version from one of its properties (`MSTestVersion`, ...) and the
+  repository sets that property too low; the remediation points at the property.
 - `UnresolvedProjectState`: any inventory error or warning on a test application (failed evaluation, missing imports, conditions on unset or
   environment-provided properties, `IsTestProject` in early props, ...). On a production project it is a warning.
 - `UnclassifiedProject`: a project the inventory could not classify, or whose target frameworks classify differently.
+- `UnsupportedSdk` also covers a test application that does not report which SDK evaluated it.
 - `UnresolvedSelection`, `UnsupportedSdk` and `MixedTestRunners` (selection level): `global.json` `test.runner` applies to every project
   `dotnet test` runs from there, and the MTP mode refuses VSTest projects ("All projects must use that test runner"), so a selection where
   some test applications would move and others stay on VSTest (or cannot be classified) is reported instead of half-migrated.
@@ -98,3 +102,9 @@ The thresholds come from each package's own `Microsoft.Testing.Platform*` depend
   and the fixtures are not modified.
 - `PreflightScenarioTests` evaluates representative passing and blocked projects with MSBuild, including MSTest.Sdk (from a local feed)
   with and without `UseVSTest`, with its version in the project or in `global.json`.
+
+## Warnings that do not block
+
+- `VsTestOnlyPackage`: `coverlet.collector` / `coverlet.msbuild`.
+- `TestRunnerNotSelected` (selection level): test applications are, or will be, on MTP v2, but `global.json` does not select
+  `test.runner` = `Microsoft.Testing.Platform`, so `dotnet test` cannot run them. Selecting it is part of the migration (#11).

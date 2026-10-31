@@ -10,12 +10,14 @@ public class MigrationRuleSetTests
 {
     private static readonly MigrationRuleSet Rules = MigrationRuleSet.Current;
 
+    private static IEnumerable<PackageRule> AllRules => [.. Rules.Packages, Rules.MSTestSdk];
+
     [Test]
     public async Task EveryUpgradeTarget_IsAReleaseThatSatisfiesItsOwnThreshold()
     {
-        foreach (PackageRule rule in Rules.Packages.Where(r => r.UpgradeTo is not null))
+        foreach (PackageRule rule in AllRules.Where(r => r.UpgradeTo is not null))
         {
-            await Assert.That(rule.UpgradeTo! >= rule.MinimumVersion!).IsTrue().Because(rule.Package);
+            await Assert.That(rule.UpgradeTo! >= rule.MinimumVersion).IsTrue().Because(rule.Package);
             await Assert.That(rule.UpgradeTo!.IsPrerelease).IsFalse().Because(rule.Package);
         }
 
@@ -40,12 +42,21 @@ public class MigrationRuleSetTests
     [Test]
     public async Task EveryRule_SaysWhereItsThresholdComesFrom()
     {
-        await Assert.That(Rules.Packages.Where(r => string.IsNullOrWhiteSpace(r.Evidence)).Select(r => r.Package)).IsEmpty();
+        await Assert.That(AllRules.Where(r => string.IsNullOrWhiteSpace(r.Evidence)).Select(r => r.Package)).IsEmpty();
+        await Assert.That(Rules.VsTestOnlyPackages.Where(r => string.IsNullOrWhiteSpace(r.Evidence)).Select(r => r.Package)).IsEmpty();
     }
 
     [Test]
     public async Task PackageLookup_IsCaseInsensitiveLikeNuGet()
     {
         await Assert.That(Rules.FindPackage("nunit3testadapter")).IsSameReferenceAs(Rules.FindPackage("NUnit3TestAdapter"));
+        await Assert.That(Rules.FindVsTestOnlyPackage("COVERLET.COLLECTOR")).IsSameReferenceAs(Rules.FindVsTestOnlyPackage("coverlet.collector"));
+    }
+
+    // MSTest.Sdk is versioned where the project references the SDK, never with a PackageReference, so a package of that name is not matched.
+    [Test]
+    public async Task MSTestSdk_IsNotAPackageRule()
+    {
+        await Assert.That(Rules.FindPackage(Rules.MSTestSdk.Package)).IsNull();
     }
 }

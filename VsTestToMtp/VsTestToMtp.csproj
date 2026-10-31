@@ -112,6 +112,8 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.VisualStudio.SolutionPersistence" />
+    <!-- NuGet's own version and range semantics for the migration rules; publishes under Native AOT without trim/AOT warnings. -->
+    <PackageReference Include="NuGet.Versioning" />
     <PackageReference Include="System.CommandLine" />
     <ProjectReference Include="..\VsTestToMtp.Contracts\VsTestToMtp.Contracts.csproj" />
     <!--

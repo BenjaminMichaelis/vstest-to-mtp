@@ -56,23 +56,28 @@ public class MSTestSdkPreflightTests
         // Only the SDK changes; the MSTest packages it declares follow it. Its version is edited where it is written.
         PackageChange change = project.PackageChanges.Single();
         await Assert.That((change.Kind, change.Package, change.FromVersion, change.ToVersion))
-            .IsEqualTo((PackageChangeKind.SdkUpgrade, "MSTest.Sdk", sdkVersion, Rules.FindPackage("MSTest.Sdk")!.UpgradeTo!.ToString()));
+            .IsEqualTo((PackageChangeKind.SdkUpgrade, "MSTest.Sdk", sdkVersion, Rules.MSTestSdk.UpgradeTo!.ToNormalizedString()));
         await Assert.That(change.Reference).IsEqualTo(sdk.Location);
-        await Assert.That(change.VersionLocation).IsEqualTo(versionInGlobalJson ? new SourceLocation("global.json", 0, 0) : sdk.Location);
+        await Assert.That(change.VersionLocation).IsEqualTo(versionInGlobalJson ? SourceLocation.OfFile("global.json") : sdk.Location);
     }
 
+    // MSTest.Sdk declares the MSTest packages with the version from MSTestVersion. When the repository pins that property below 4.0, the
+    // property is what has to change, whether or not the SDK itself is upgraded.
     [Test]
-    public async Task MSTestVersionPinnedBelowMtpV2_UnderAnMtpV2Sdk_IsBlocked_BecauseTheSdkDeclaresThePackages()
+    [Arguments("4.0.0", "2.0.0")]
+    [Arguments("3.11.0", "1.9.0")]
+    public async Task MSTestVersionPinnedBelowMtpV2_IsBlocked_AtTheProperty(string sdkVersion, string platformVersion)
     {
-        using ScenarioWorkspace workspace = new ScenarioWorkspace().Write(App, Project("MSTest.Sdk/4.0.0", "<MSTestVersion>3.11.0</MSTestVersion>"));
-        using LocalSdkFeed feed = new LocalSdkFeed(workspace).AddSdk("MSTest.Sdk", "4.0.0", Props("4.0.0", "2.0.0"), Targets);
+        using ScenarioWorkspace workspace = new ScenarioWorkspace().Write(App, Project($"MSTest.Sdk/{sdkVersion}", "<MSTestVersion>3.11.0</MSTestVersion>"));
+        using LocalSdkFeed feed = new LocalSdkFeed(workspace).AddSdk("MSTest.Sdk", sdkVersion, Props(sdkVersion, platformVersion), Targets);
 
         ProjectPreflight project = CompatibilityPreflight.Assess(feed.Inventory(App)).Projects.Single();
 
         await Assert.That(project.Readiness).IsEqualTo(MigrationReadiness.Blocked);
-        await Assert.That(project.PackageChanges).IsEmpty();
-        await Assert.That(project.Diagnostics.Select(d => d.Code)).IsEquivalentTo([PreflightCode.PackageNotInRepository, PreflightCode.PackageNotInRepository]);
-        await Assert.That(project.Diagnostics.All(d => d.Location!.File.EndsWith("Sdk.targets", StringComparison.Ordinal))).IsTrue();
+        PreflightDiagnostic[] errors = [.. project.Diagnostics.Where(d => d.Severity == BlockerSeverity.Error)];
+        await Assert.That(errors.Select(d => d.Code)).IsEquivalentTo([PreflightCode.SdkPackageVersionPinned, PreflightCode.SdkPackageVersionPinned]);
+        await Assert.That(errors.All(d => d.Location == new SourceLocation(App, workspace.LineOf(App, "<MSTestVersion>"), 5))).IsTrue();
+        await Assert.That(errors.All(d => d.Remediation.Contains("MSTestVersion", StringComparison.Ordinal))).IsTrue();
     }
 
     private static string Project(string sdk, string properties) => $"""

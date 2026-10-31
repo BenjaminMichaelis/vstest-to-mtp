@@ -71,7 +71,7 @@ internal static class TestProjectClassifier
             Runners: runners,
             TargetFrameworks: states,
             Imports: evaluated.Imports,
-                Sdks: evaluated.Sdks,
+            Sdks: evaluated.Sdks,
             Blockers: BlockerOrdering.Normalize(blockers));
     }
 
@@ -92,7 +92,7 @@ internal static class TestProjectClassifier
         bool hasLibraryDependency = testPackages.Any(p =>
             TestPackageCatalog.TryGet(p.Name, out TestPackageInfo? info) && info.Role != TestPackageRole.Runner);
 
-        PropertyState? isTestProject = PropertyState.Find(framework.Properties, "IsTestProject");
+        PropertyState? isTestProject = PropertyState.Find(framework.Properties, MsBuildPropertyNames.IsTestProject);
         if (isTestProject is { Value.Length: > 0 } && !MsBuildBoolean.TryParse(isTestProject.Value, out _))
         {
             // The explicit property is authoritative, so a value that is not a boolean makes the classification undeterminable.

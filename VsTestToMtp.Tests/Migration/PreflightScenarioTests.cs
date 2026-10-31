@@ -85,7 +85,7 @@ public class PreflightScenarioTests
         await Assert.That(project.Diagnostics).IsEmpty();
         PackageChange change = project.PackageChanges.Single();
         await Assert.That((change.Kind, change.Package, change.FromVersion, change.ToPackage, change.ToVersion))
-            .IsEqualTo((PackageChangeKind.Upgrade, upgraded, from, upgraded, Rules.FindPackage(upgraded)!.UpgradeTo!.ToString()));
+            .IsEqualTo((PackageChangeKind.Upgrade, upgraded, from, upgraded, Rules.FindPackage(upgraded)!.UpgradeTo!.ToNormalizedString()));
         await Assert.That(change.Reason).Contains($"{upgraded} {from}");
 
         // An inline version is edited where it is written: on the reference itself.
@@ -120,9 +120,37 @@ public class PreflightScenarioTests
         await Assert.That(project.Readiness).IsEqualTo(MigrationReadiness.Eligible);
         await Assert.That(project.Framework).IsEqualTo(TestFramework.XUnitV3);
         PackageChange change = project.PackageChanges.Single();
-        string expectedVersion = keepsVersion ? version : Rules.XUnitV3UpgradeTo.ToString();
+        string expectedVersion = keepsVersion ? version : Rules.XUnitV3UpgradeTo.ToNormalizedString();
         await Assert.That((change.Kind, change.Package, change.FromVersion, change.ToPackage, change.ToVersion))
             .IsEqualTo((PackageChangeKind.Replace, package, version, variant, expectedVersion));
+    }
+
+    // xUnit v3's packages require each other at exactly the same version, so a companion the project references itself moves with it.
+    [Test]
+    public async Task XUnitV3Companions_MoveWithTheVersion_WhenTheVariantChangeRaisesIt()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject(App, References("xunit.v3:3.1.0,xunit.v3.assert:3.1.0,xunit.v3.extensibility.core:3.1.0"));
+
+        ProjectPreflight project = Assess(workspace);
+
+        string target = Rules.XUnitV3UpgradeTo.ToNormalizedString();
+        await Assert.That(project.Readiness).IsEqualTo(MigrationReadiness.Eligible);
+        await Assert.That(project.PackageChanges.Select(c => (c.Kind, c.Package, c.ToPackage, c.ToVersion))).IsEquivalentTo(
+        [
+            (PackageChangeKind.Replace, "xunit.v3", "xunit.v3.mtp-v2", target),
+            (PackageChangeKind.Upgrade, "xunit.v3.assert", "xunit.v3.assert", target),
+            (PackageChangeKind.Upgrade, "xunit.v3.extensibility.core", "xunit.v3.extensibility.core", target),
+        ]);
+    }
+
+    [Test]
+    public async Task XUnitV3Companions_AreLeftAlone_WhenTheVersionStaysTheSame()
+    {
+        using ScenarioWorkspace workspace = new ScenarioWorkspace().WriteProject(App, References("xunit.v3:3.2.1,xunit.v3.assert:3.2.1"));
+
+        ProjectPreflight project = Assess(workspace);
+
+        await Assert.That(project.PackageChanges.Select(c => c.Package)).IsEquivalentTo(["xunit.v3"]);
     }
 
     [Test]
@@ -364,8 +392,8 @@ public class PreflightScenarioTests
         await Assert.That(result.Projects.Select(p => (p.Path, p.Readiness))).IsEquivalentTo(
             [("MSTests/MSTests.csproj", MigrationReadiness.Eligible), ("XUnit2Tests/XUnit2Tests.csproj", MigrationReadiness.Blocked)]);
         PreflightDiagnostic mixed = result.Diagnostics.Single(d => d.Code == PreflightCode.MixedTestRunners);
-        await Assert.That((mixed.Project, mixed.Severity, mixed.Location)).IsEqualTo(((string?)null, BlockerSeverity.Error, new SourceLocation("global.json", 0, 0)));
-        await Assert.That(mixed.RelatedLocations).IsEquivalentTo([new SourceLocation("XUnit2Tests/XUnit2Tests.csproj", 0, 0)]);
+        await Assert.That((mixed.Project, mixed.Severity, mixed.Location)).IsEqualTo(((string?)null, BlockerSeverity.Error, SourceLocation.OfFile("global.json")));
+        await Assert.That(mixed.RelatedLocations).IsEquivalentTo([SourceLocation.OfFile("XUnit2Tests/XUnit2Tests.csproj")]);
         await Assert.That(result.CanMigrate).IsFalse();
     }
 
